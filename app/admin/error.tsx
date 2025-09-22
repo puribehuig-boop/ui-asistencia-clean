@@ -1,5 +1,5 @@
 // app/admin/error.tsx
-'use client';
+"use client";
 
 export default function AdminError({
   error,
