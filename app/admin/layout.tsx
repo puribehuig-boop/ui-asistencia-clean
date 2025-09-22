@@ -30,12 +30,12 @@ export default async function AdminLayout({ children }: { children: React.ReactN
 
     // Leer perfil/rol desde profiles
     const rows = await prisma.$queryRaw<Profile[]>`
-      SELECT user_id, email, role
-      FROM public.profiles
-      WHERE user_id = ${data.user.id}
-      LIMIT 1
-    `;
-    const profile = rows[0] ?? null;
+    SELECT user_id, email, role
+    FROM public.profiles
+    WHERE user_id = CAST(${data.user.id} AS uuid)
+    LIMIT 1
+  `;
+  const profile = rows[0] ?? null;
 
     if (!profile || profile.role !== "admin") {
       return (
