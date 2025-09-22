@@ -2,11 +2,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
+export const runtime = "nodejs";
+
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
 
-  // Preparamos la redirección y ESCRIBIMOS cookies ahí
+  // Redirección donde escribimos las cookies
   const res = NextResponse.redirect(new URL("/admin", req.url));
 
   const supabase = createServerClient(
@@ -29,5 +31,5 @@ export async function GET(req: NextRequest) {
     await supabase.auth.exchangeCodeForSession(code);
   }
 
-  return res; // 👈 devolvemos la respuesta que ya trae Set-Cookie
+  return res; // respuesta con Set-Cookie hacia /admin
 }
