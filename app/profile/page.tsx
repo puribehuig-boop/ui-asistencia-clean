@@ -1,13 +1,6 @@
 // app/profile/page.tsx
 import { redirect } from "next/navigation";
-
-// ⬇️ Usa la firma que tengas en tu helper:
-// 1) Si exportas una función creadora:
-import { serverClient } from "@/lib/supabase/serverClient";
-//    (si en tu repo se llama distinto, p.ej. getServerClient(), cambia esta línea)
-
-// 2) Si en cambio exportas una *instancia*, sería:
-// import serverClient from "@/lib/supabase/serverClient";
+import { createSupabaseServerClient } from "@/lib/supabase/serverClient";
 
 export const dynamic = "force-dynamic";   // evita cachear por usuario
 export const revalidate = 0;
