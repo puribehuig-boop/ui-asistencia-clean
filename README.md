@@ -24,5 +24,5 @@ Prototipo listo para importar en **Vercel**. Incluye:
 - Generar QR por sesión con URL firmada.
 - Autenticación de docente/admin.
 
-- (deploy trigger 9 23 25 v2)
+- (deploy trigger 9 23 25 v3)
 
