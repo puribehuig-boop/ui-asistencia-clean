@@ -17,7 +17,7 @@ function parseStartTs(ses: Ses): Date {
   const sd = ses.session_date;
   let sp = ses.start_planned;
   const startedAt = ses.started_at;
-  if (sp && /^\d{4}$/.test(sp)) sp = hhmmToTime(sp);
+  if (sp && /^\d{4}$/.test(sp)) sp = `${sp.slice(0,2)}:${sp.slice(2)}`
   if (sd && sp) return new Date(`${sd}T${sp}:00`);
   if (startedAt) return new Date(startedAt);
   return new Date();
@@ -42,7 +42,7 @@ export default function SessionRosterClient({ session, settings }: { session: Se
   }
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [session.id]);
 
-  // Ventana para bloquear UI (el backend ya lo valida también)
+  // Ventana (el backend también valida)
   const windowInfo = useMemo(() => {
     const tol = Number(settings?.attendance_tolerance_min ?? 15);
     const start = parseStartTs(session);
@@ -117,24 +117,25 @@ export default function SessionRosterClient({ session, settings }: { session: Se
         </div>
       </div>
 
+      {/* Cambiamos a 7 columnas para dar más espacio a "Acciones" (col-span-2) */}
       <div className="border rounded overflow-hidden">
-        <div className="grid grid-cols-6 gap-2 p-3 text-sm font-medium bg-gray-50">
+        <div className="grid grid-cols-7 gap-2 p-3 text-sm font-semibold bg-gray-100 text-black">
           <div>ID</div>
           <div className="col-span-2">Alumno</div>
           <div>Estado</div>
           <div>Actualizado</div>
-          <div>Acciones</div>
+          <div className="col-span-2">Acciones</div>
         </div>
 
         {items.map(it => {
-          const disableNonJust = outsideWindow; // Bloqueo UX: si estás fuera, solo Justificado se permite
+          const disableNonJust = outsideWindow; // UX: fuera de ventana, solo Justificado
           return (
-            <div key={it.student_id} className="grid grid-cols-6 gap-2 p-3 border-t text-sm items-center">
+            <div key={it.student_id} className="grid grid-cols-7 gap-2 p-3 border-t text-sm items-center">
               <div>{it.student_id}</div>
               <div className="col-span-2 truncate">{it.student_name || <span className="opacity-60">—</span>}</div>
               <div>{it.status || <span className="opacity-60">—</span>}</div>
               <div>{it.updated_at ? new Date(it.updated_at).toLocaleString() : "—"}</div>
-              <div className="flex flex-wrap gap-2">
+              <div className="col-span-2 flex flex-wrap gap-2">
                 {STATUSES.map(s => (
                   <button
                     key={s}
