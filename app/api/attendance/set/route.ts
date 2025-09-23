@@ -1,6 +1,5 @@
 // app/api/attendance/set/route.ts
 import { NextResponse } from "next/server";
-// Ajusta esta ruta si tu admin client está en otro archivo:
 import { supabaseAdmin } from "@/lib/supabase/adminClient";
 
 export const runtime = "nodejs";
@@ -20,24 +19,12 @@ function parseStartDate(session: any): Date {
   if (startedAt) return new Date(startedAt);
   return new Date();
 }
-
-/** Normaliza/corrige el status hacia los valores permitidos por tu BD (ES) */
 function toDbStatus(input: string | undefined, fallback: "present" | "late" | "absent" | "justified"): "Presente" | "Tarde" | "Ausente" | "Justificado" {
   const key = (input ?? fallback).toString().trim().toLowerCase();
-
-  // inglés
-  if (key === "present" || key === "on_time") return "Presente";
-  if (key === "late") return "Tarde";
-  if (key === "absent") return "Ausente";
-  if (key === "justified" || key === "justify") return "Justificado";
-
-  // español (cualquier mayúsc/minúsc)
-  if (key === "presente") return "Presente";
-  if (key === "tarde") return "Tarde";
-  if (key === "ausente") return "Ausente";
-  if (key === "justificado") return "Justificado";
-
-  // por defecto, asumimos presente
+  if (key === "present" || key === "on_time" || key === "presente") return "Presente";
+  if (key === "late" || key === "tarde") return "Tarde";
+  if (key === "absent" || key === "ausente") return "Ausente";
+  if (key === "justified" || key === "justificado" || key === "justify") return "Justificado";
   return "Presente";
 }
 
@@ -45,38 +32,27 @@ export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
 
-    // Puede venir sessionId (numérico) o sessionCode (texto)
+    // sessionId (BIGINT) o sessionCode (texto)
     const rawSessionId = body?.sessionId;
     const sessionCode = typeof body?.sessionCode === "string" ? body.sessionCode.trim() : "";
 
-    // Detectar si sessionId es numérico (BIGINT en tu BD)
     let sessionIdNum: number | null = null;
-    if (typeof rawSessionId === "number" && Number.isFinite(rawSessionId)) {
-      sessionIdNum = rawSessionId;
-    } else if (typeof rawSessionId === "string" && /^\d+$/.test(rawSessionId.trim())) {
-      sessionIdNum = Number(rawSessionId.trim());
-    }
+    if (typeof rawSessionId === "number" && Number.isFinite(rawSessionId)) sessionIdNum = rawSessionId;
+    else if (typeof rawSessionId === "string" && /^\d+$/.test(rawSessionId.trim())) sessionIdNum = Number(rawSessionId.trim());
 
     const explicitStatus = typeof body?.status === "string" ? body.status : undefined;
     const studentId = Number(body?.studentId);
-    const studentName =
-      typeof body?.studentName === "string" ? body.studentName.trim() : "";
+    const studentName = typeof body?.studentName === "string" ? body.studentName.trim() : "";
     const finalStudentName = studentName && studentName.length > 0 ? studentName : `ID:${studentId}`;
 
     if (sessionIdNum === null && !sessionCode) {
-      return NextResponse.json(
-        { ok: false, error: "Falta sessionId (numérico) o sessionCode" },
-        { status: 400 }
-      );
+      return NextResponse.json({ ok: false, error: "Falta sessionId (numérico) o sessionCode" }, { status: 400 });
     }
     if (!Number.isFinite(studentId) || studentId <= 0) {
-      return NextResponse.json(
-        { ok: false, error: "studentId inválido" },
-        { status: 400 }
-      );
+      return NextResponse.json({ ok: false, error: "studentId inválido" }, { status: 400 });
     }
 
-    /* 1) Resolver sesión */
+    // 1) Sesión
     let ses: any = null;
     if (sessionIdNum !== null) {
       const { data, error } = await supabaseAdmin
@@ -98,27 +74,34 @@ export async function POST(req: Request) {
       ses = data;
     }
 
-    /* 2) Settings */
+    // 2) Settings (tolerancias + duración)
     const { data: gs, error: gsErr } = await supabaseAdmin
       .from("global_settings")
-      .select("attendance_tolerance_min, late_threshold_min")
+      .select("attendance_tolerance_min, late_threshold_min, class_duration_min")
       .eq("id", 1)
       .maybeSingle();
     if (gsErr) return NextResponse.json({ ok: false, error: gsErr.message }, { status: 500 });
 
     const tol = Number(gs?.attendance_tolerance_min ?? 15);
     const lateTh = Number(gs?.late_threshold_min ?? 30);
+    const classDur = Number(gs?.class_duration_min ?? 60);
 
-    /* 3) Ventana y status */
+    // 3) Ventanas y bloqueo por fin de sesión
     const baseStart = parseStartDate(ses);
+    const sessionEnd = new Date(baseStart.getTime() + classDur * 60_000);
     const windowFrom = new Date(baseStart.getTime() - tol * 60_000);
     const windowTo   = new Date(baseStart.getTime() + tol * 60_000);
 
     const now = new Date();
     const computed = now.getTime() - baseStart.getTime() >= lateTh * 60_000 ? "late" : "present";
-    const dbStatus = toDbStatus(explicitStatus, computed); // 👈 siempre uno de: Presente/Tarde/Ausente/Justificado
+    const dbStatus = toDbStatus(explicitStatus, computed);
 
-    /* 4) Upsert manual (select -> update/insert) */
+    // 🔒 Regla: después de la sesión, solo Justificado se puede editar
+    if (now > sessionEnd && dbStatus !== "Justificado") {
+      return NextResponse.json({ ok: false, error: "locked_after_session" }, { status: 403 });
+    }
+
+    // 4) Upsert (select -> update/insert)
     const { data: existing, error: exErr } = await supabaseAdmin
       .from("attendance")
       .select("id")
@@ -163,11 +146,9 @@ export async function POST(req: Request) {
       ok: true,
       record: result,
       window: { from: windowFrom.toISOString(), to: windowTo.toISOString() },
+      sessionEnd: sessionEnd.toISOString(),
     });
   } catch (e: any) {
-    return NextResponse.json(
-      { ok: false, error: String(e?.message || e) },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 });
   }
 }
