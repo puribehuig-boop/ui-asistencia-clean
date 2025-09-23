@@ -35,16 +35,27 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   const sessionId = Number(params.id);
   if (!Number.isFinite(sessionId)) return new Response("sessionId inválido", { status: 400 });
 
-  // 1) Sesión base (ya trae teacher_name / teacher_email si existen)
   const { data: ses, error: sErr } = await supabaseAdmin
     .from("sessions")
-    .select("id, session_code, session_date, start_planned, started_at, teacher_name, teacher_email")
+    .select("id, session_code, session_date, start_planned, started_at, teacher_user_id, teacher_name, teacher_email")
     .eq("id", sessionId)
     .maybeSingle();
   if (sErr) return new Response(sErr.message, { status: 500 });
   if (!ses) return new Response("Sesión no encontrada", { status: 404 });
 
-  // 2) Attendance (alumnos)
+  // docente: preferir teacher_user_id => teacher_profile + profiles
+  let teacherName: string | null = ses.teacher_name ?? null;
+  let teacherEmail: string | null = ses.teacher_email ?? null;
+
+  if (ses.teacher_user_id) {
+    const [{ data: tp }, { data: pp }] = await Promise.all([
+      supabaseAdmin.from("teacher_profile").select("display_name").eq("user_id", ses.teacher_user_id).maybeSingle(),
+      supabaseAdmin.from("profiles").select("email").eq("user_id", ses.teacher_user_id).maybeSingle(),
+    ]);
+    if (tp?.display_name) teacherName = tp.display_name;
+    if (pp?.email) teacherEmail = pp.email;
+  }
+
   const { data: att, error: aErr } = await supabaseAdmin
     .from("attendance")
     .select("student_id, student_name, status, updated_at")
@@ -52,11 +63,9 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     .order("student_id");
   if (aErr) return new Response(aErr.message, { status: 500 });
 
-  // Conteos por estado
   const counts: Record<string, number> = { Presente: 0, Tarde: 0, Ausente: 0, Justificado: 0 };
   for (const r of att ?? []) if (r.status) counts[r.status] = (counts[r.status] ?? 0) + 1;
 
-  // 3) Metadatos extra desde schedule_slots (room/grupo/subject por día+hora)
   const dateStr = ses.session_date as string | null;
   const plannedHHMMSS = toHHMMSS((ses.start_planned ? hhmmToTime(ses.start_planned) : undefined) || "");
   const roomGuess = roomFromSessionCode(ses.session_code);
@@ -66,7 +75,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   let roomResolved: string | null = roomGuess;
 
   if (dateStr && plannedHHMMSS) {
-    const weekday = ((new Date(`${dateStr}T00:00:00`).getDay() + 6) % 7) + 1; // 1..7 (lun..dom)
+    const weekday = ((new Date(`${dateStr}T00:00:00`).getDay() + 6) % 7) + 1;
     let slots: any[] = [];
 
     if (roomGuess) {
@@ -97,7 +106,6 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     }
   }
 
-  // 4) CSV: metadatos + línea en blanco + detalle
   const metaLines = kvRows({
     session_id: ses.id,
     session_code: ses.session_code ?? "",
@@ -105,8 +113,8 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     start_planned: ses.start_planned ? hhmmToTime(ses.start_planned) : "",
     started_at: ses.started_at ?? "",
     room: roomResolved ?? "",
-    teacher_name: ses.teacher_name ?? "",
-    teacher_email: ses.teacher_email ?? "",
+    teacher_name: teacherName ?? "",
+    teacher_email: teacherEmail ?? "",
     groups: groupNames.join(" | "),
     subjects: subjects.join(" | "),
     total_alumnos: att?.length ?? 0,
@@ -119,10 +127,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   const header = ["student_id", "student_name", "status", "updated_at"];
   const detailLines = [
     header.join(","),
-    ...((att ?? []).map((r) =>
-      [r.student_id, r.student_name ?? "", r.status ?? "", r.updated_at ?? ""]
-        .map(csvEscape).join(",")
-    )),
+    ...((att ?? []).map((r) => [r.student_id, r.student_name ?? "", r.status ?? "", r.updated_at ?? ""].map(csvEscape).join(","))),
   ];
 
   const csv = [...metaLines, "", ...detailLines].join("\n");
