@@ -88,4 +88,68 @@ export async function POST(req: Request) {
     if (gsErr) return NextResponse.json({ ok: false, error: gsErr.message }, { status: 500 });
 
     const tol = Number(gs?.attendance_tolerance_min ?? 15); // minutos de ventana
-    const lateTh = Number(gs?.late_threshold_m
+    const lateTh = Number(gs?.late_threshold_min ?? 30);     // minutos para 'late'
+
+    // 3) Determinar ventana y status
+    const baseStart = parseStartDate(ses);
+    const windowFrom = new Date(baseStart.getTime() - tol * 60_000);
+    const windowTo   = new Date(baseStart.getTime() + tol * 60_000);
+
+    const now = new Date();
+    const computedStatus: "present" | "late" =
+      now.getTime() - baseStart.getTime() >= lateTh * 60_000 ? "late" : "present";
+    const finalStatus = explicitStatus ?? computedStatus;
+
+    // 4) Upsert "manual" (select -> update/insert) SIN requerir unique constraint
+    const { data: existing, error: exErr } = await supabaseAdmin
+      .from("attendance")
+      .select("id")
+      .eq("session_id", ses.id)
+      .eq("student_id", studentId)
+      .maybeSingle();
+    if (exErr) return NextResponse.json({ ok: false, error: exErr.message }, { status: 500 });
+
+    let result: any = null;
+    if (existing?.id) {
+      const { data, error } = await supabaseAdmin
+        .from("attendance")
+        .update({
+          status: finalStatus,
+          updated_at: new Date().toISOString(),
+          updated_by: "system", // opcional: cambia por email docente si lo envías
+          ...(studentName ? { student_name: studentName } : {}),
+        })
+        .eq("id", existing.id)
+        .select()
+        .maybeSingle();
+      if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+      result = data;
+    } else {
+      const { data, error } = await supabaseAdmin
+        .from("attendance")
+        .insert({
+          session_id: ses.id,
+          student_id: studentId,
+          status: finalStatus,
+          updated_at: new Date().toISOString(),
+          updated_by: "system",
+          ...(studentName ? { student_name: studentName } : {}),
+        })
+        .select()
+        .maybeSingle();
+      if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+      result = data;
+    }
+
+    return NextResponse.json({
+      ok: true,
+      record: result,
+      window: { from: windowFrom.toISOString(), to: windowTo.toISOString() },
+    });
+  } catch (e: any) {
+    return NextResponse.json(
+      { ok: false, error: String(e?.message || e) },
+      { status: 500 }
+    );
+  }
+}
