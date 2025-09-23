@@ -1,13 +1,10 @@
-// app/api/teacher/sessions/[id]/roster/route.ts
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/adminClient";
 
 export const runtime = "nodejs";
 
-// JS Sunday=0...Saturday=6  -> queremos Monday=1...Sunday=7
-function jsDayToIsoMon1Sun7(d: number) {
-  return ((d + 6) % 7) + 1;
-}
+// JS Sunday=0...Saturday=6 -> queremos Monday=1...Sunday=7
+function jsDayToIsoMon1Sun7(d: number) { return ((d + 6) % 7) + 1; }
 function hhmmToTime(hhmm?: string | null) {
   if (!hhmm) return "";
   const m = hhmm.match(/^(\d{2})(\d{2})$/);
@@ -23,17 +20,11 @@ function toHHMMSS(s?: string | null) {
 }
 function roomFromSessionCode(code?: string | null): string | null {
   if (!code) return null;
-  // Ejemplos posibles:
-  // "A-101-20250923-0800" -> room = "A-101"
-  // "LAB2-20250923-0900"  -> room = "LAB2"
-  const tokens = code.split("-");
-  // Buscar el índice del token que parezca fecha YYYYMMDD
-  const idxDate = tokens.findIndex(t => /^\d{8}$/.test(t));
-  if (idxDate > 0) {
-    return tokens.slice(0, idxDate).join("-");
-  }
-  // Si no hay fecha, devolvemos el primer tramo (mejor que nada)
-  return tokens[0] || null;
+  // "A-101-20250923-0800" -> "A-101"
+  const toks = code.split("-");
+  const iDate = toks.findIndex(t => /^\d{8}$/.test(t));
+  if (iDate > 0) return toks.slice(0, iDate).join("-");
+  return toks[0] || null;
 }
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
@@ -51,38 +42,36 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   if (sErr) return NextResponse.json({ ok: false, error: sErr.message }, { status: 500 });
   if (!ses) return NextResponse.json({ ok: false, error: "Sesión no encontrada" }, { status: 404 });
 
-  // Calcular weekday y hora normalizada
+  // Fecha / hora de inicio (preferir start_planned)
   const dateStr = ses.session_date as string | null;
   const jsDate = dateStr ? new Date(`${dateStr}T00:00:00`) : (ses.started_at ? new Date(ses.started_at) : new Date());
-  const weekday = jsDayToIsoMon1Sun7(jsDate.getDay()); // 1..7 (1 = lunes)
-  const startHHMMSS = toHHMMSS((ses.start_planned ? hhmmToTime(ses.start_planned) : undefined) || "");
+  const weekday = jsDayToIsoMon1Sun7(jsDate.getDay());
+  const plannedHH = toHHMMSS((ses.start_planned ? hhmmToTime(ses.start_planned) : undefined) || "");
+  const maybeRoom = roomFromSessionCode(ses.session_code);
 
   // 2) Intentar hallar schedule_slots por weekday + start_time (+ room_code si podemos)
-  const maybeRoom = roomFromSessionCode(ses.session_code);
   let slots: any[] = [];
-  // intento estricto (con room_code)
-  if (maybeRoom && startHHMMSS) {
+  if (maybeRoom && plannedHH) {
     const { data, error } = await supabaseAdmin
       .from("schedule_slots")
       .select("id, room_code, group_name, start_time, weekday")
       .eq("weekday", weekday)
-      .eq("start_time", startHHMMSS)
+      .eq("start_time", plannedHH)
       .eq("room_code", maybeRoom);
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     slots = data ?? [];
   }
-  // intento laxo (sin room_code)
-  if ((!slots || slots.length === 0) && startHHMMSS) {
+  if ((!slots || slots.length === 0) && plannedHH) {
     const { data, error } = await supabaseAdmin
       .from("schedule_slots")
       .select("id, room_code, group_name, start_time, weekday")
       .eq("weekday", weekday)
-      .eq("start_time", startHHMMSS);
+      .eq("start_time", plannedHH);
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     slots = data ?? [];
   }
 
-  // 3) Con los slots encontrados, resolver group_id(s) por nombre en tabla "Group"
+  // 3) Resolver group_id(s) por nombre en "Group"
   let groupIds: number[] = [];
   if (slots.length > 0) {
     const groupNames = Array.from(new Set(slots.map(s => String(s.group_name || "")).filter(Boolean)));
@@ -96,7 +85,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     }
   }
 
-  // 4) Alumnos por Enrollment (si hay grupos). Si no, caeremos a attendance.
+  // 4) Alumnos por Enrollment (si hay grupos); si no, caeremos a attendance
   let enrollmentIds: number[] = [];
   if (groupIds.length > 0) {
     const { data: enr, error: eErr } = await supabaseAdmin
@@ -107,7 +96,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     enrollmentIds = (enr ?? []).map((r: any) => Number(r.student_id)).filter(Number.isFinite);
   }
 
-  // 5) Nombres desde StudentProfile
+  // 5) Nombres desde StudentProfile (opcional)
   const namesById = new Map<number, string>();
   if (enrollmentIds.length > 0) {
     const { data: profs, error: pErr } = await supabaseAdmin
@@ -136,20 +125,20 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     attById.set(sid, { name: r.student_name ?? "", status: r.status ?? "", updated_at: r.updated_at ?? null });
   }
 
-  // 7) Construir roster (preferir Enrollment; fallback a attendance)
+  // 7) Construir lista final
   let items: any[] = [];
   if (enrollmentIds.length > 0) {
     items = enrollmentIds.map((sid) => {
-      const attRow = attById.get(sid);
+      const a = attById.get(sid);
       return {
         student_id: sid,
-        student_name: (attRow?.name || namesById.get(sid) || "").toString(),
-        status: attRow?.status || "",
-        updated_at: attRow?.updated_at || null,
+        student_name: (a?.name || namesById.get(sid) || "").toString(),
+        status: a?.status || "",
+        updated_at: a?.updated_at || null,
       };
     });
   } else {
-    // Sin grupos ligados: mostrar lo ya marcado en la sesión
+    // Fallback: los ya marcados en esta sesión
     items = (att ?? []).map((r: any) => ({
       student_id: Number(r.student_id),
       student_name: (r.student_name ?? "").toString(),
@@ -159,5 +148,9 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   }
 
   items.sort((a, b) => (a.student_name || "").localeCompare(b.student_name || "") || a.student_id - b.student_id);
-  return NextResponse.json({ ok: true, items, meta: { matchedSlots: slots.length, usedRoom: !!maybeRoom } });
+  return NextResponse.json({
+    ok: true,
+    items,
+    meta: { matchedSlots: slots.length, usedRoom: !!maybeRoom }
+  });
 }
