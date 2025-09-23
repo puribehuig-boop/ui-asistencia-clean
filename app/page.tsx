@@ -7,13 +7,7 @@ export default function Home() {
           Este es el prototipo inicial. Aquí podrás probar el flujo como docente y ver el panel de administración básico.
         </p>
           <div className="mt-4 flex flex-wrap gap-3">
-            <a
-              href="/session-demo?sessionId=demo-123"
-              className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10"
-            >
-              Abrir sesión demo (QR)
-            </a>
-          
+        
             <a
               href="/admin"
               className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10"
@@ -22,10 +16,10 @@ export default function Home() {
             </a>
           
             <a
-              href="/qr?roomId=A-101"
+              href="/qr"
               className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10"
             >
-              Imprimir QR del salón A-101
+              Imprimir QRs de Salones
             </a>
 
             <a href="/admin/sessions" className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10">
