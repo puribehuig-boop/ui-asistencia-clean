@@ -3,7 +3,6 @@ import { supabaseAdmin } from "@/lib/supabase/adminClient";
 
 export const runtime = "nodejs";
 
-// Utils
 function hhmmToTime(hhmm?: string | null) {
   if (!hhmm) return "";
   const m = (hhmm || "").match(/^(\d{2})(\d{2})$/);
@@ -36,10 +35,10 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   const sessionId = Number(params.id);
   if (!Number.isFinite(sessionId)) return new Response("sessionId inválido", { status: 400 });
 
-  // 1) Sesión base
+  // 1) Sesión base (ya trae teacher_name / teacher_email si existen)
   const { data: ses, error: sErr } = await supabaseAdmin
     .from("sessions")
-    .select("id, session_code, session_date, start_planned, started_at")
+    .select("id, session_code, session_date, start_planned, started_at, teacher_name, teacher_email")
     .eq("id", sessionId)
     .maybeSingle();
   if (sErr) return new Response(sErr.message, { status: 500 });
@@ -57,7 +56,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   const counts: Record<string, number> = { Presente: 0, Tarde: 0, Ausente: 0, Justificado: 0 };
   for (const r of att ?? []) if (r.status) counts[r.status] = (counts[r.status] ?? 0) + 1;
 
-  // 3) Resolver metadatos: hora/room/grupo/subject (best-effort con schedule_slots)
+  // 3) Metadatos extra desde schedule_slots (room/grupo/subject por día+hora)
   const dateStr = ses.session_date as string | null;
   const plannedHHMMSS = toHHMMSS((ses.start_planned ? hhmmToTime(ses.start_planned) : undefined) || "");
   const roomGuess = roomFromSessionCode(ses.session_code);
@@ -67,10 +66,9 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   let roomResolved: string | null = roomGuess;
 
   if (dateStr && plannedHHMMSS) {
-    const weekday = ((new Date(`${dateStr}T00:00:00`).getDay() + 6) % 7) + 1; // 1=lun..7=dom
-
-    // primero intento con room_code + hora + weekday
+    const weekday = ((new Date(`${dateStr}T00:00:00`).getDay() + 6) % 7) + 1; // 1..7 (lun..dom)
     let slots: any[] = [];
+
     if (roomGuess) {
       const { data, error } = await supabaseAdmin
         .from("schedule_slots")
@@ -81,7 +79,6 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       if (error) return new Response(error.message, { status: 500 });
       slots = data ?? [];
     }
-    // fallback: sin room
     if (!slots.length) {
       const { data, error } = await supabaseAdmin
         .from("schedule_slots")
@@ -95,13 +92,12 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     if (slots.length) {
       groupNames = Array.from(new Set(slots.map((s) => String(s.group_name || "")).filter(Boolean)));
       subjects   = Array.from(new Set(slots.map((s) => String(s.subject || "")).filter(Boolean)));
-      // si hay un solo room en los slots, úsalo como room “resuelto”
       const rooms = Array.from(new Set(slots.map((s) => String(s.room_code || "")).filter(Boolean)));
       if (rooms.length === 1) roomResolved = rooms[0];
     }
   }
 
-  // 4) Armar CSV: sección de metadatos + línea en blanco + tabla de alumnos
+  // 4) CSV: metadatos + línea en blanco + detalle
   const metaLines = kvRows({
     session_id: ses.id,
     session_code: ses.session_code ?? "",
@@ -109,6 +105,8 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     start_planned: ses.start_planned ? hhmmToTime(ses.start_planned) : "",
     started_at: ses.started_at ?? "",
     room: roomResolved ?? "",
+    teacher_name: ses.teacher_name ?? "",
+    teacher_email: ses.teacher_email ?? "",
     groups: groupNames.join(" | "),
     subjects: subjects.join(" | "),
     total_alumnos: att?.length ?? 0,
