@@ -79,7 +79,11 @@ export default function QrClient({
         <h2 className="font-medium">Generar QR individual</h2>
         <div className="flex flex-wrap items-center gap-2">
           <label className="text-sm">Salón:</label>
-          <select className="border rounded px-2 py-1" value={room} onChange={(e) => setRoom(e.target.value)}>
+          <select
+          className="border border-gray-300 rounded px-2 py-1 bg-white text-black"
+          value={room}
+          onChange={(e) => setRoom(e.target.value)}
+          >
             {rooms.map((r) => (
               <option key={r} value={r}>
                 {r}
