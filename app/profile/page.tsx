@@ -1,14 +1,16 @@
 // app/profile/page.tsx
-"use client";
+import { redirect } from "next/navigation";
 
-import { useEffect, useState } from "react";
-// (A) si exportas "supabase" directo:
-// import { supabase } from "@/lib/supabase/browserClient";
-// (B) si exportas "browserClient":
-// import { browserClient as supabase } from "@/lib/supabase/browserClient";
-// (C) si exportas una función creadora:
-// import { createBrowserClient } from "@/lib/supabase/browserClient";
-// const supabase = createBrowserClient();
+// ⬇️ Usa la firma que tengas en tu helper:
+// 1) Si exportas una función creadora:
+import { serverClient } from "@/lib/supabase/serverClient";
+//    (si en tu repo se llama distinto, p.ej. getServerClient(), cambia esta línea)
+
+// 2) Si en cambio exportas una *instancia*, sería:
+// import serverClient from "@/lib/supabase/serverClient";
+
+export const dynamic = "force-dynamic";   // evita cachear por usuario
+export const revalidate = 0;
 
 type ProfileRow = { user_id: string; email: string; role: string };
 type TeacherRow = {
@@ -42,58 +44,58 @@ function mask(val?: string | null, opts: { keepStart?: number; keepEnd?: number 
   return `${val.slice(0, keepStart)}${mid}${val.slice(-keepEnd)}`;
 }
 
-export default function ProfilePage() {
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string>("");
-  const [profile, setProfile] = useState<ProfileRow | null>(null);
-  const [teacher, setTeacher] = useState<TeacherRow | null>(null);
+export default async function ProfilePage() {
+  // Si tu helper es función creadora:
+  const supabase = typeof serverClient === "function" ? serverClient() : serverClient;
 
-  useEffect(() => {
-    (async () => {
-      try {
-        // 1) Usuario autenticado
-        const { data: auth } = await supabase.auth.getUser();
-        const user = auth?.user ?? null;
-        if (!user) { setLoading(false); return; }
+  // 1) Usuario autenticado
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
+  if (authErr) {
+    return (<div className="p-6 text-red-600">Error de autenticación: {authErr.message}</div>);
+  }
+  const user = auth?.user ?? null;
+  if (!user) {
+    // Si prefieres mostrar mensaje en lugar de redirigir, cambia esta línea.
+    redirect("/login");
+  }
 
-        // 2) Perfil base (RLS: (user_id = auth.uid()) OR is_admin())
-        const { data: p, error: pErr } = await supabase
-          .from("profiles")
-          .select("user_id,email,role")
-          .eq("user_id", user.id)
-          .maybeSingle();
-        if (pErr) throw pErr;
-        setProfile(p);
+  // 2) Perfil base (RLS: (user_id = auth.uid()) OR is_admin())
+  const { data: p, error: pErr } = await supabase
+    .from("profiles")
+    .select("user_id,email,role")
+    .eq("user_id", user.id)
+    .maybeSingle();
 
-        // 3) Si es docente, cargar teacher_profile (RLS: SELECT authenticated)
-        if (p?.role === "docente") {
-          const { data: t, error: tErr } = await supabase
-            .from("teacher_profile")
-            .select(`
-              display_name, first_name, last_name, alt_email, phone, edad, photo_url,
-              curp, rfc, direccion, plantel, licenciatura, cedula_lic,
-              maestria, cedula_maest, doctorado, cedula_doct, estado_civil, nacionalidad
-            `)
-            .eq("user_id", user.id)
-            .maybeSingle();
-          if (tErr) throw tErr;
-          setTeacher(t);
-        }
-      } catch (e: any) {
-        setErr(e?.message || String(e));
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, []);
+  if (pErr) {
+    return (<div className="p-6 text-red-600">Error cargando perfil: {pErr.message}</div>);
+  }
+  const profile = p as ProfileRow | null;
+  if (!profile) {
+    return (<div className="p-6">No se encontró tu perfil.</div>);
+  }
 
-  if (loading) return <div className="p-6">Cargando…</div>;
-  if (err) return <div className="p-6 text-red-600">Error: {err}</div>;
-  if (!profile) return <div className="p-6">No has iniciado sesión.</div>;
+  // 3) Si es docente, traer teacher_profile (RLS: SELECT authenticated)
+  let teacher: TeacherRow | null = null;
+  if (profile.role === "docente") {
+    const { data: t, error: tErr } = await supabase
+      .from("teacher_profile")
+      .select(`
+        display_name, first_name, last_name, alt_email, phone, edad, photo_url,
+        curp, rfc, direccion, plantel, licenciatura, cedula_lic,
+        maestria, cedula_maest, doctorado, cedula_doct, estado_civil, nacionalidad
+      `)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (tErr) {
+      return (<div className="p-6 text-red-600">Error cargando datos de docente: {tErr.message}</div>);
+    }
+    teacher = t as TeacherRow | null;
+  }
 
   const displayName =
     teacher?.display_name ||
     [teacher?.first_name, teacher?.last_name].filter(Boolean).join(" ") ||
+    (user.user_metadata?.name as string | undefined) ||
     profile.email.split("@")[0];
 
   return (
