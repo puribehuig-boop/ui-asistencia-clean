@@ -1,4 +1,4 @@
-// Cliente de Supabase para **server** usando cookies (App Router)
+// lib/supabase/serverClient.ts
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 
@@ -13,10 +13,14 @@ export function createSupabaseServerClient() {
           return cookieStore.get(name)?.value;
         },
         set(name: string, value: string, options: any) {
-          cookieStore.set({ name, value, ...options });
+          try {
+            cookieStore.set(name, value, options); // o cookieStore.set({ name, value, ...options })
+          } catch {}
         },
         remove(name: string, options: any) {
-          cookieStore.set({ name, value: "", ...options });
+          try {
+            cookieStore.set(name, "", { ...options, maxAge: 0, path: "/" });
+          } catch {}
         },
       },
     }
