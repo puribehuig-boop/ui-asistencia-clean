@@ -1,20 +1,18 @@
 // app/api/attendance/set/route.ts
 import { NextResponse } from "next/server";
-// Usa el admin client que ya tienes en tu repo:
 import { supabaseAdmin } from "@/lib/supabase/adminClient";
 
 export const runtime = "nodejs";
 
-// Helpers
 function hhmmToTime(hhmm: string) {
   const m = hhmm.match(/^(\d{2})(\d{2})$/);
   if (!m) return hhmm;
   return `${m[1]}:${m[2]}`;
 }
 function parseStartDate(session: any): Date {
-  const sd = session?.session_date;      // "YYYY-MM-DD"
-  let sp = session?.start_planned as string | null; // "HH:MM" o "HHMM"
-  const startedAt = session?.started_at; // ISO
+  const sd = session?.session_date;
+  let sp = session?.start_planned as string | null;
+  const startedAt = session?.started_at;
   if (sp && /^\d{4}$/.test(sp)) sp = hhmmToTime(sp);
   if (sd && sp) return new Date(`${sd}T${sp}:00`);
   if (startedAt) return new Date(startedAt);
@@ -25,12 +23,9 @@ export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
 
-    // Puede venir sessionId (numérico) o sessionCode (texto)
     const rawSessionId = body?.sessionId;
-    const sessionCode =
-      typeof body?.sessionCode === "string" ? body.sessionCode.trim() : "";
+    const sessionCode = typeof body?.sessionCode === "string" ? body.sessionCode.trim() : "";
 
-    // Detectar si sessionId es numérico (número o string de dígitos)
     let sessionIdNum: number | null = null;
     if (typeof rawSessionId === "number" && Number.isFinite(rawSessionId)) {
       sessionIdNum = rawSessionId;
@@ -39,22 +34,18 @@ export async function POST(req: Request) {
     }
 
     const explicitStatus = body?.status as "present" | "late" | "absent" | undefined;
-
     const studentId = Number(body?.studentId);
-    const studentName =
-      typeof body?.studentName === "string" ? body.studentName.trim() : null;
+    const studentName = typeof body?.studentName === "string" ? body.studentName.trim() : "";
+    const finalStudentName = studentName && studentName.length > 0 ? studentName : `ID:${studentId}`;
 
     if (sessionIdNum === null && !sessionCode) {
-      return NextResponse.json(
-        { ok: false, error: "Falta sessionId (numérico) o sessionCode" },
-        { status: 400 }
-      );
+      return NextResponse.json({ ok: false, error: "Falta sessionId (numérico) o sessionCode" }, { status: 400 });
     }
     if (!Number.isFinite(studentId) || studentId <= 0) {
       return NextResponse.json({ ok: false, error: "studentId inválido" }, { status: 400 });
     }
 
-    // 1) Resolver la sesión por id NUMÉRICO o por session_code
+    // 1) Sesión
     let ses: any = null;
     if (sessionIdNum !== null) {
       const { data, error } = await supabaseAdmin
@@ -90,14 +81,13 @@ export async function POST(req: Request) {
     // 3) Ventana y status
     const baseStart = parseStartDate(ses);
     const windowFrom = new Date(baseStart.getTime() - tol * 60_000);
-    const windowTo   = new Date(baseStart.getTime() + tol * 60_000);
-
+    const windowTo = new Date(baseStart.getTime() + tol * 60_000);
     const now = new Date();
     const computedStatus: "present" | "late" =
       now.getTime() - baseStart.getTime() >= lateTh * 60_000 ? "late" : "present";
     const finalStatus = explicitStatus ?? computedStatus;
 
-    // 4) Upsert manual (select -> update/insert)
+    // 4) Upsert manual
     const { data: existing, error: exErr } = await supabaseAdmin
       .from("attendance")
       .select("id")
@@ -114,7 +104,7 @@ export async function POST(req: Request) {
           status: finalStatus,
           updated_at: new Date().toISOString(),
           updated_by: "system",
-          ...(studentName ? { student_name: studentName } : {}),
+          student_name: finalStudentName, // asegurar NOT NULL también en updates
         })
         .eq("id", existing.id)
         .select()
@@ -127,10 +117,10 @@ export async function POST(req: Request) {
         .insert({
           session_id: ses.id,
           student_id: studentId,
+          student_name: finalStudentName, // ✅ siempre enviamos algo
           status: finalStatus,
           updated_at: new Date().toISOString(),
           updated_by: "system",
-          ...(studentName ? { student_name: studentName } : {}),
         })
         .select()
         .maybeSingle();
@@ -144,9 +134,6 @@ export async function POST(req: Request) {
       window: { from: windowFrom.toISOString(), to: windowTo.toISOString() },
     });
   } catch (e: any) {
-    return NextResponse.json(
-      { ok: false, error: String(e?.message || e) },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 });
   }
 }
