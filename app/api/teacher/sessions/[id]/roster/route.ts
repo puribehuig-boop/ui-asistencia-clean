@@ -3,7 +3,6 @@ import { supabaseAdmin } from "@/lib/supabase/adminClient";
 
 export const runtime = "nodejs";
 
-// JS Sunday=0...Saturday=6 -> queremos Monday=1...Sunday=7
 function jsDayToIsoMon1Sun7(d: number) { return ((d + 6) % 7) + 1; }
 function hhmmToTime(hhmm?: string | null) {
   if (!hhmm) return "";
@@ -20,7 +19,6 @@ function toHHMMSS(s?: string | null) {
 }
 function roomFromSessionCode(code?: string | null): string | null {
   if (!code) return null;
-  // "A-101-20250923-0800" -> "A-101"
   const toks = code.split("-");
   const iDate = toks.findIndex(t => /^\d{8}$/.test(t));
   if (iDate > 0) return toks.slice(0, iDate).join("-");
@@ -33,7 +31,6 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     return NextResponse.json({ ok: false, error: "sessionId inválido" }, { status: 400 });
   }
 
-  // 1) Sesión base
   const { data: ses, error: sErr } = await supabaseAdmin
     .from("sessions")
     .select("id, session_code, session_date, start_planned, started_at")
@@ -42,14 +39,13 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   if (sErr) return NextResponse.json({ ok: false, error: sErr.message }, { status: 500 });
   if (!ses) return NextResponse.json({ ok: false, error: "Sesión no encontrada" }, { status: 404 });
 
-  // Fecha / hora de inicio (preferir start_planned)
   const dateStr = ses.session_date as string | null;
   const jsDate = dateStr ? new Date(`${dateStr}T00:00:00`) : (ses.started_at ? new Date(ses.started_at) : new Date());
   const weekday = jsDayToIsoMon1Sun7(jsDate.getDay());
   const plannedHH = toHHMMSS((ses.start_planned ? hhmmToTime(ses.start_planned) : undefined) || "");
   const maybeRoom = roomFromSessionCode(ses.session_code);
 
-  // 2) Intentar hallar schedule_slots por weekday + start_time (+ room_code si podemos)
+  // 1) schedule_slots por weekday + start (+ room si aplica)
   let slots: any[] = [];
   if (maybeRoom && plannedHH) {
     const { data, error } = await supabaseAdmin
@@ -71,21 +67,24 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     slots = data ?? [];
   }
 
-  // 3) Resolver group_id(s) por nombre en "Group"
+  // 2) Resolver group_ids por nombre (case-insensitive)
   let groupIds: number[] = [];
   if (slots.length > 0) {
-    const groupNames = Array.from(new Set(slots.map(s => String(s.group_name || "")).filter(Boolean)));
+    const groupNames = Array.from(new Set(slots.map(s => String(s.group_name || "").trim()).filter(Boolean)));
     if (groupNames.length > 0) {
+      // Construimos un OR dinámico con ilike para nombres exactos case-insensitive
+      // Ej.: or=(name.ilike.A%,name.ilike.B%) -> aquí sin %, para equivalencia insensible a mayúsculas
+      const orExpr = groupNames.map(n => `name.ilike.${n}`).join(",");
       const { data: groups, error: gErr } = await supabaseAdmin
         .from("Group")
         .select("id, name")
-        .in("name", groupNames);
+        .or(orExpr);
       if (gErr) return NextResponse.json({ ok: false, error: gErr.message }, { status: 500 });
       groupIds = (groups ?? []).map((g: any) => Number(g.id)).filter(Number.isFinite);
     }
   }
 
-  // 4) Alumnos por Enrollment (si hay grupos); si no, caeremos a attendance
+  // 3) Alumnos desde Enrollment (si hay grupos); si no, caeremos a attendance
   let enrollmentIds: number[] = [];
   if (groupIds.length > 0) {
     const { data: enr, error: eErr } = await supabaseAdmin
@@ -96,7 +95,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     enrollmentIds = (enr ?? []).map((r: any) => Number(r.student_id)).filter(Number.isFinite);
   }
 
-  // 5) Nombres desde StudentProfile (opcional)
+  // 4) Nombres desde StudentProfile
   const namesById = new Map<number, string>();
   if (enrollmentIds.length > 0) {
     const { data: profs, error: pErr } = await supabaseAdmin
@@ -111,7 +110,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     }
   }
 
-  // 6) Asistencia actual
+  // 5) Asistencia ya marcada
   const { data: att, error: aErr } = await supabaseAdmin
     .from("attendance")
     .select("student_id, student_name, status, updated_at")
@@ -125,7 +124,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     attById.set(sid, { name: r.student_name ?? "", status: r.status ?? "", updated_at: r.updated_at ?? null });
   }
 
-  // 7) Construir lista final
+  // 6) Construcción final
   let items: any[] = [];
   if (enrollmentIds.length > 0) {
     items = enrollmentIds.map((sid) => {
@@ -138,7 +137,6 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       };
     });
   } else {
-    // Fallback: los ya marcados en esta sesión
     items = (att ?? []).map((r: any) => ({
       student_id: Number(r.student_id),
       student_name: (r.student_name ?? "").toString(),
@@ -151,6 +149,11 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   return NextResponse.json({
     ok: true,
     items,
-    meta: { matchedSlots: slots.length, usedRoom: !!maybeRoom }
+    meta: {
+      matchedSlots: slots.length,
+      usedRoom: !!maybeRoom,
+      plannedHH,
+      weekday
+    }
   });
 }
