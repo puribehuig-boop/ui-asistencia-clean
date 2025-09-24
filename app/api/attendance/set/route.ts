@@ -75,13 +75,25 @@ export async function POST(req: Request) {
   // 5) Info de ventana (útil para UI)
   // Nota: usamos RPC para hora efectiva + settings
   const sessionId = rows[0].session_id;
-  const [eff, gs] = await Promise.all([
-    supabase.rpc("session_effective_start", { p_session_id: sessionId }).single().catch(() => ({ data: null })),
-    supabase.from("global_settings").select("attendance_tolerance_min").eq("id", 1).maybeSingle()
-  ]);
 
-  const tol = Number(gs.data?.attendance_tolerance_min ?? 15);
-  const start_effective = eff?.data ? String(eff.data) : null;
+const [effRes, gsRes] = await Promise.all([
+  supabase.rpc("session_effective_start", { p_session_id: sessionId }),
+  supabase.from("global_settings")
+    .select("attendance_tolerance_min")
+    .eq("id", 1)
+    .maybeSingle(),
+]);
+
+const effErr = (effRes as any)?.error;
+const effData = (effRes as any)?.data ?? null;
+if (effErr) {
+  // No interrumpas la respuesta si la RPC falla; simplemente no habrá ventana calculada
+  // console.error("RPC session_effective_start error:", effErr);
+}
+
+const tol = Number(gsRes.data?.attendance_tolerance_min ?? 15);
+const start_effective = effData ? String(effData) : null;
+
 
   return NextResponse.json({
     ok: true,
