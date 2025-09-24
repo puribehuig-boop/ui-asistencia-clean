@@ -73,6 +73,7 @@ export async function POST(req: Request) {
       session_code: code,
       group_id,                    // puede quedar null
       room_code: room,             // ⬅️ requerido por tu NOT NULL
+      status: "started",
     })
     .select("id")
     .maybeSingle();
