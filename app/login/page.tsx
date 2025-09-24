@@ -88,7 +88,7 @@ export default function LoginPage() {
     if (!res.ok || !j.ok) throw new Error(j.error || "No se pudo sincronizar la sesión en el servidor");
 
     // Listo: ahora el guard del Admin verá la sesión
-    window.location.href = "/admin";
+    window.location.href = "/profile";
   } catch (e: any) {
     setErr(e.message || String(e));
   } finally {
