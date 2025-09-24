@@ -22,11 +22,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok:false, error:"invalid_session_id" }, { status:400 });
   }
 
-  const { error } = await supabase.from("sessions")
-    .update({ ended_at: new Date().toISOString() })
-    .eq("id", session_id!)
-    .select("id")
-    .maybeSingle();
+  const { error } = await supabase
+  .from("sessions")
+  .update({ ended_at: new Date().toISOString(), status: "finished" })
+  .eq("id", session_id!)
+  .select("id")
+  .maybeSingle();
+
 
   if (error) return NextResponse.json({ ok:false, error: error.message }, { status:400 });
   return NextResponse.json({ ok:true });
