@@ -22,19 +22,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok:false, error:"invalid_session_id" }, { status:400 });
   }
 
-  const { data: inserted, error } = await supabase
+  const { error } = await supabase
   .from("sessions")
-  .insert({
-    teacher_user_id: uid,
-    session_date: new Date().toISOString().slice(0, 10),
-    start_planned,               // puede ser null
-    started_at: new Date().toISOString(),
-    is_manual: true,
-    session_code: code,
-    group_id,                    // puede ser null
-    room_code: room,
-    status: "started",           // ⬅️ aquí
-  })
+  .update({ started_at: new Date().toISOString(), status: "started" })
+  .eq("id", session_id!)
   .select("id")
   .maybeSingle();
 
