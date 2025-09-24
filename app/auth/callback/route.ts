@@ -9,7 +9,7 @@ export async function GET(req: NextRequest) {
   const code = url.searchParams.get("code");
 
   // Redirección donde escribimos las cookies
-  const res = NextResponse.redirect(new URL("/admin", req.url));
+  const res = NextResponse.redirect(new URL("/profile", req.url));
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
