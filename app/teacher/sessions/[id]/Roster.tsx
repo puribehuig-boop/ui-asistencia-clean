@@ -2,7 +2,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 // Ajusta este import a tu browser client real:
-import supabase from "@/lib/supabase/browserClient";
+import { browserClient as supabase } from "@/lib/supabase/browserClient";
 // Si no tienes "browserClient", expórtalo como "supabase" y cambia la línea de arriba.
 
 type Row = {
