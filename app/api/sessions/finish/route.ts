@@ -1,29 +1,25 @@
-import { NextResponse } from 'next/server';
-import { supabaseAdmin } from "@/lib/supabaseAdmin";
+// app/api/sessions/finish/route.ts
+import { NextResponse } from "next/server";
+import { createSupabaseServerClient } from "@/lib/supabase/serverClient";
+
+export const runtime = "nodejs";
 
 export async function POST(req: Request) {
-  try {
-    const body = await req.json().catch(() => ({}));
-    const session_code = String(body?.sessionId || '').trim();
-    if (!session_code) return NextResponse.json({ ok: false, error: 'missing_sessionId' }, { status: 400 });
+  const supabase = createSupabaseServerClient();
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth?.user) return NextResponse.json({ ok: false, error: "unauthenticated" }, { status: 401 });
 
-    const { data: existing, error: selErr } = await supabaseAdmin
-      .from('sessions')
-      .select('id')
-      .eq('session_code', session_code)
-      .maybeSingle();
+  const body = await req.json().catch(() => null);
+  const session_id = Number(body?.session_id);
+  if (!Number.isFinite(session_id)) return NextResponse.json({ ok: false, error: "invalid_session_id" }, { status: 400 });
 
-    if (selErr) return NextResponse.json({ ok: false, error: selErr.message }, { status: 500 });
-    if (!existing?.id) return NextResponse.json({ ok: false, error: 'session_not_found' }, { status: 404 });
+  const { error } = await supabase
+    .from("sessions")
+    .update({ ended_at: new Date().toISOString() })
+    .eq("id", session_id)
+    .select("id")
+    .maybeSingle();
 
-    const { error: updErr } = await supabaseAdmin
-      .from('sessions')
-      .update({ status: 'finished', ended_at: new Date().toISOString() })
-      .eq('id', existing.id);
-
-    if (updErr) return NextResponse.json({ ok: false, error: updErr.message }, { status: 500 });
-    return NextResponse.json({ ok: true });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 });
-  }
+  if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
+  return NextResponse.json({ ok: true });
 }
