@@ -52,13 +52,14 @@ export async function POST(req: Request) {
 
   // 4) upsert bajo RLS (onConflict por par lógico)
   const { data, error } = await supabase
-    .from("attendance")
-    .upsert(rows, {
-      onConflict: "session_id,student_id",
-      ignoreDuplicates: false,
-      defaultToNull: false,
-      returning: "representation",
-    });
+  .from("attendance")
+  .upsert(rows, {
+    onConflict: "session_id,student_id",
+    ignoreDuplicates: false,
+    defaultToNull: false,
+  })
+  .select(); // devuelve las filas afectadas
+
 
   if (error) {
     // Mensajes amables para errores comunes
