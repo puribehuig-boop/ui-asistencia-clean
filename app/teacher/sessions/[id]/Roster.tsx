@@ -24,107 +24,91 @@ export default function Roster({
   const [err, setErr] = useState<string>("");
 
   async function load() {
-    setLoading(true);
-    setErr("");
-    try {
-      // 1) Intentar vista v_session_roster
-      let useFallback = false;
-      const { data: vrows, error: verr } = await supabase
-        .from("v_session_roster")
-        .select("student_id, student_name, status, updated_at")
-        .eq("session_id", sessionId);
+  setLoading(true);
+  setErr("");
+  try {
+    // 1) PRIMERO: intenta leer attendance existente de la sesión (más directo)
+    const attRes = await supabase
+      .from("attendance")
+      .select("student_id, student_name, status, updated_at")
+      .eq("session_id", sessionId);
 
-      if (verr) {
-        useFallback = true;
-      } else if (Array.isArray(vrows)) {
-        setRows(
-          vrows.map((r: any) => ({
-            student_id: String(r.student_id),
-            student_name: r.student_name || "—",
-            status: (r.status as any) ?? null,
-            updated_at: r.updated_at ?? null,
-          }))
-        );
-      } else {
-        useFallback = true;
-      }
-
-      // 2) Fallback: Enrollment + profiles + attendance
-      if (useFallback) {
-        if (!groupId) {
-          // 3) Último fallback: solo attendance existentes
-          const { data: att } = await supabase
-            .from("attendance")
-            .select("student_id, student_name, status, updated_at")
-            .eq("session_id", sessionId);
-          setRows(
-            (att ?? []).map((a: any) => ({
-              student_id: String(a.student_id),
-              student_name: a.student_name || "—",
-              status: a.status ?? null,
-              updated_at: a.updated_at ?? null,
-            }))
-          );
-          return;
-        }
-
-        // Leer enrollment (intentamos first student_user_id, luego student_id)
-        let studentIds: string[] = [];
-        let e1 = await supabase
-          .from("Enrollment")
-          .select("student_user_id")
-          .eq("group_id", groupId);
-        if (e1.error || !Array.isArray(e1.data)) {
-          const e2 = await supabase
-            .from("Enrollment")
-            .select("student_id")
-            .eq("group_id", groupId);
-          if (e2.error) throw e2.error;
-          studentIds = e2.data.map((r: any) => String(r.student_id));
-        } else {
-          studentIds = e1.data.map((r: any) => String(r.student_user_id));
-        }
-
-        // Jalar nombres desde profiles (ajusta si usas StudentProfile con display_name)
-        const { data: profs } = await supabase
-          .from("profiles")
-          .select("user_id, email")
-          .in("user_id", studentIds);
-
-        const byId: Record<string, { name: string }> = {};
-        (profs ?? []).forEach((p: any) => {
-          byId[String(p.user_id)] = { name: p.email };
-        });
-
-        const { data: att } = await supabase
-          .from("attendance")
-          .select("student_id, status, updated_at, student_name")
-          .eq("session_id", sessionId);
-
-        const byAtt: Record<string, { status: any; updated_at: string | null; student_name?: string | null }> = {};
-        (att ?? []).forEach((a: any) => {
-          byAtt[String(a.student_id)] = { status: a.status, updated_at: a.updated_at, student_name: a.student_name };
-        });
-
-        const merged = studentIds.map((id) => {
-          const baseName = byId[id]?.name || "—";
-          const a = byAtt[id];
-          return {
-            student_id: id,
-            student_name: a?.student_name || baseName,
-            status: (a?.status as any) ?? null,
-            updated_at: a?.updated_at ?? null,
-          } as Row;
-        });
-
-        setRows(merged);
-      }
-    } catch (e: any) {
-      setErr(e.message || String(e));
-    } finally {
+    if (!attRes.error && Array.isArray(attRes.data) && attRes.data.length > 0) {
+      setRows(
+        attRes.data.map((a: any) => ({
+          student_id: String(a.student_id),
+          student_name: a.student_name || "—",
+          status: a.status ?? null,
+          updated_at: a.updated_at ?? null,
+        }))
+      );
       setLoading(false);
+      return;
     }
+
+    // 2) Si no hay attendance (o no se puede leer), intenta la vista v_session_roster
+    const vrowsRes = await supabase
+      .from("v_session_roster")
+      .select("student_id, student_name, status, updated_at")
+      .eq("session_id", sessionId);
+
+    if (!vrowsRes.error && Array.isArray(vrowsRes.data) && vrowsRes.data.length > 0) {
+      setRows(
+        vrowsRes.data.map((r: any) => ({
+          student_id: String(r.student_id),
+          student_name: r.student_name || "—",
+          status: r.status ?? null,
+          updated_at: r.updated_at ?? null,
+        }))
+      );
+      setLoading(false);
+      return;
+    }
+
+    // 3) Último fallback: Enrollment → profiles (sólo si hay groupId)
+    if (!groupId) {
+      setRows([]);
+      setLoading(false);
+      return;
+    }
+
+    // Enrollment: intenta student_user_id, luego student_id
+    let studentIds: string[] = [];
+    const e1 = await supabase.from("Enrollment").select("student_user_id").eq("group_id", groupId);
+    if (!e1.error && Array.isArray(e1.data) && e1.data.length > 0) {
+      studentIds = e1.data.map((r: any) => String(r.student_user_id));
+    } else {
+      const e2 = await supabase.from("Enrollment").select("student_id").eq("group_id", groupId);
+      if (!e2.error && Array.isArray(e2.data)) {
+        studentIds = e2.data.map((r: any) => String(r.student_id));
+      }
+    }
+
+    const profs = await supabase
+      .from("profiles")
+      .select("user_id, email")
+      .in("user_id", studentIds);
+
+    const byId: Record<string, string> = {};
+    if (!profs.error && Array.isArray(profs.data)) {
+      profs.data.forEach((p: any) => (byId[String(p.user_id)] = p.email));
+    }
+
+    setRows(
+      studentIds.map((id) => ({
+        student_id: id,
+        student_name: byId[id] || "—",
+        status: null,
+        updated_at: null,
+      }))
+    );
+  } catch (e: any) {
+    setErr(e.message || String(e));
+  } finally {
+    setLoading(false);
   }
+}
+
 
   useEffect(() => {
     load();
