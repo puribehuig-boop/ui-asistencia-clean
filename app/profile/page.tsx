@@ -1,137 +1,112 @@
-import { redirect } from "next/navigation";
+// app/profile/page.tsx
 import { createSupabaseServerClient } from "@/lib/supabase/serverClient";
+import { redirect } from "next/navigation";
+import ProfileTabs from "./ProfileTabs";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-type ProfileRow = { user_id: string; email: string; role: string };
-type TeacherRow = {
-  display_name?: string; first_name?: string; last_name?: string;
-  alt_email?: string; phone?: string; edad?: number; photo_url?: string;
-  curp?: string; rfc?: string; direccion?: string; plantel?: string;
-  licenciatura?: string; cedula_lic?: string; maestria?: string; cedula_maest?: string;
-  doctorado?: string; cedula_doct?: string; estado_civil?: string; nacionalidad?: string;
+type SessionRow = {
+  id: number; session_date: string | null; start_planned: string | null;
+  room_code: string | null; status: string | null; is_manual: boolean | null;
+  started_at: string | null; ended_at: string | null; group_id: number | null;
 };
 
-function mask(val?: string | null, opts: { keepStart?: number; keepEnd?: number } = {}) {
-  if (!val) return "—";
-  const keepStart = opts.keepStart ?? 4, keepEnd = opts.keepEnd ?? 2;
-  if (val.length <= keepStart + keepEnd) return val;
-  const mid = "•".repeat(Math.max(3, val.length - keepStart - keepEnd));
-  return `${val.slice(0, keepStart)}${mid}${val.slice(-keepEnd)}`;
+type GroupRow = { id: number; code: string | null; subjectId: number | null };
+type SubjectRow = { id: number; name: string | null };
+
+function hhmmFrom(startPlanned?: string | null) {
+  if (!startPlanned) return null;
+  if (/^\d{4}$/.test(startPlanned)) return `${startPlanned.slice(0,2)}:${startPlanned.slice(2,4)}`;
+  if (/^\d{2}:\d{2}/.test(startPlanned)) return startPlanned.slice(0,5);
+  return null;
+}
+function withinPlannedWindow(sessionDate?: string | null, hhmm?: string | null, isManual?: boolean | null) {
+  if (isManual) return true;
+  if (!sessionDate || !hhmm) return false;
+  const planned = new Date(`${sessionDate}T${hhmm}:00`);
+  if (isNaN(planned.getTime())) return false;
+  const now = new Date();
+  const from = new Date(planned.getTime() - 30 * 60 * 1000);
+  const to   = new Date(planned.getTime() + 30 * 60 * 1000);
+  return now >= from && now <= to;
 }
 
 export default async function ProfilePage() {
   const supabase = createSupabaseServerClient();
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth?.user) redirect("/login");
 
-  // 1) Usuario
-  const { data: auth, error: authErr } = await supabase.auth.getUser();
-  if (authErr) return <div className="p-6 text-red-600">Error de autenticación: {authErr.message}</div>;
-  const user = auth?.user;
-  if (!user) redirect("/login");
-
-  // 2) Perfil base
-  const { data: p, error: pErr } = await supabase
+  // PERFIL BÁSICO
+  const { data: me } = await supabase
     .from("profiles")
-    .select("user_id,email,role")
-    .eq("user_id", user.id)
+    .select("email, role")
+    .eq("user_id", auth.user.id)
     .maybeSingle();
-  if (pErr) return <div className="p-6 text-red-600">Error cargando perfil: {pErr.message}</div>;
-  const profile = p as ProfileRow | null;
-  if (!profile) return <div className="p-6">No se encontró tu perfil.</div>;
 
-  // 3) Docente (si aplica)
-  let teacher: TeacherRow | null = null;
-  if (profile.role === "docente") {
-    const { data: t, error: tErr } = await supabase
-      .from("teacher_profile")
-      .select(`
-        display_name, first_name, last_name, alt_email, phone, edad, photo_url,
-        curp, rfc, direccion, plantel, licenciatura, cedula_lic,
-        maestria, cedula_maest, doctorado, cedula_doct, estado_civil, nacionalidad
-      `)
-      .eq("user_id", user.id)
-      .maybeSingle();
-    if (tErr) return <div className="p-6 text-red-600">Error cargando datos de docente: {tErr.message}</div>;
-    teacher = t as TeacherRow | null;
+  // MIS CLASES (últimos 14 días y próximos 7)
+  const today = new Date();
+  const from = new Date(today.getTime() - 14 * 86400000).toISOString().slice(0,10);
+  const to   = new Date(today.getTime() +  7 * 86400000).toISOString().slice(0,10);
+
+  const { data: sessions } = await supabase
+    .from("sessions")
+    .select("id, session_date, start_planned, room_code, status, is_manual, started_at, ended_at, group_id")
+    .eq("teacher_user_id", auth.user.id)
+    .gte("session_date", from)
+    .lte("session_date", to)
+    .order("session_date", { ascending: true });
+
+  // Enriquecer con group/subject
+  const groupIds = Array.from(new Set((sessions ?? []).map(s => s.group_id).filter(Boolean))) as number[];
+  let groupMap = new Map<number, GroupRow>();
+  let subjectMap = new Map<number, SubjectRow>();
+
+  if (groupIds.length) {
+    const { data: groups } = await supabase.from("Group")
+      .select("id, code, subjectId").in("id", groupIds);
+    (groups ?? []).forEach(g => groupMap.set(g.id, g));
+    const subjectIds = Array.from(new Set((groups ?? []).map(g => g.subjectId).filter(Boolean))) as number[];
+    if (subjectIds.length) {
+      const { data: subjects } = await supabase.from("Subject")
+        .select("id, name").in("id", subjectIds);
+      (subjects ?? []).forEach(s => subjectMap.set(s.id, s));
+    }
   }
 
-  const displayName =
-    teacher?.display_name ||
-    [teacher?.first_name, teacher?.last_name].filter(Boolean).join(" ") ||
-    (user.user_metadata?.name as string | undefined) ||
-    profile.email.split("@")[0];
+  const classes = (sessions ?? []).map(s => {
+    const g = s.group_id ? groupMap.get(s.group_id) ?? null : null;
+    const subj = g?.subjectId ? subjectMap.get(g.subjectId) ?? null : null;
+    const hhmm = hhmmFrom(s.start_planned);
+    return {
+      id: s.id,
+      date: s.session_date,
+      time: hhmm,
+      room: s.room_code,
+      status: s.status,
+      isManual: !!s.is_manual,
+      startedAt: s.started_at,
+      endedAt: s.ended_at,
+      groupCode: g?.code ?? null,
+      subjectName: subj?.name ?? null,
+      withinWindow: withinPlannedWindow(s.session_date, hhmm, s.is_manual),
+    };
+  });
+
+  // MIS MATERIAS (distintas por las que tiene sesiones)
+  const distinctSubjects = Array.from(
+    new Map(
+      classes
+        .filter(c => !!c.subjectName)
+        .map(c => [c.subjectName!, { name: c.subjectName!, groupCode: c.groupCode }])
+    ).values()
+  );
 
   return (
-    <div className="max-w-3xl mx-auto p-6 space-y-6">
-      <h1 className="text-2xl font-semibold">Perfil</h1>
-
-      {/* Cabecera */}
-      <section className="flex items-center gap-4 border rounded p-4 bg-gray-50">
-        <Avatar name={displayName} src={teacher?.photo_url} />
-        <div className="flex-1">
-          <div className="text-lg font-medium">{displayName}</div>
-          <div className="text-sm opacity-80">{profile.email}</div>
-          <div className="text-sm">Rol: <span className="font-medium">{profile.role}</span></div>
-        </div>
-        <div>
-          <a href="/auth/signout" className="px-3 py-2 border rounded text-sm">Cerrar sesión</a>
-        </div>
-      </section>
-
-      {/* Datos del docente */}
-      {profile.role === "docente" && (
-        <section className="border rounded p-4">
-          <h2 className="font-medium mb-3">Datos del docente</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-            <Field label="Nombre" value={displayName} />
-            <Field label="Teléfono" value={teacher?.phone || "—"} />
-            <Field label="Correo alterno" value={teacher?.alt_email || "—"} />
-            <Field label="Edad" value={teacher?.edad != null ? String(teacher.edad) : "—"} />
-            <Field label="CURP" value={mask(teacher?.curp)} />
-            <Field label="RFC" value={mask(teacher?.rfc)} />
-            <Field label="Dirección" value={teacher?.direccion || "—"} />
-            <Field label="Plantel" value={teacher?.plantel || "—"} />
-            <Field label="Licenciatura" value={teacher?.licenciatura || "—"} />
-            <Field label="Cédula Lic." value={teacher?.cedula_lic || "—"} />
-            <Field label="Maestría" value={teacher?.maestria || "—"} />
-            <Field label="Cédula Maest." value={teacher?.cedula_maest || "—"} />
-            <Field label="Doctorado" value={teacher?.doctorado || "—"} />
-            <Field label="Cédula Doct." value={teacher?.cedula_doct || "—"} />
-            <Field label="Estado civil" value={teacher?.estado_civil || "—"} />
-            <Field label="Nacionalidad" value={teacher?.nacionalidad || "—"} />
-          </div>
-        </section>
-      )}
-
-      {/* Para otros roles puedes agregar secciones similares más adelante */}
-    </div>
-  );
-}
-
-function Field({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col">
-      <span className="opacity-60">{label}</span>
-      <span className="font-medium break-words">{value || "—"}</span>
-    </div>
-  );
-}
-
-function Avatar({ name, src }: { name?: string; src?: string | null }) {
-  const initials =
-    (name || "")
-      .split(" ")
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((w) => w[0]?.toUpperCase())
-      .join("") || "👤";
-  return src ? (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img src={src} alt="foto" className="w-16 h-16 rounded-full object-cover" />
-  ) : (
-    <div className="w-16 h-16 rounded-full bg-gray-200 flex items-center justify-center text-xl">
-      {initials}
-    </div>
+    <ProfileTabs
+      profile={{ email: me?.email ?? auth.user.email ?? "", role: me?.role ?? "docente" }}
+      classes={classes}
+      subjects={distinctSubjects}
+    />
   );
 }
