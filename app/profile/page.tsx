@@ -59,40 +59,34 @@ export default async function ProfilePage() {
 
 
   // Enriquecer con group/subject
-  const groupIds = Array.from(new Set((sessions ?? []).map(s => s.group_id).filter(Boolean))) as number[];
-  let groupMap = new Map<number, GroupRow>();
-  let subjectMap = new Map<number, SubjectRow>();
+  // después de leer sessions:
+const groupIds = Array.from(new Set((sessions ?? []).map(s => s.group_id).filter(Boolean))) as number[];
+const sessionSubjectIds = Array.from(new Set((sessions ?? []).map((s:any) => s.subjectId).filter(Boolean))) as number[];
 
-  if (groupIds.length) {
-    const { data: groups } = await supabase.from("Group")
-      .select("id, code, subjectId").in("id", groupIds);
-    (groups ?? []).forEach(g => groupMap.set(g.id, g));
-    const subjectIds = Array.from(new Set((groups ?? []).map(g => g.subjectId).filter(Boolean))) as number[];
-    if (subjectIds.length) {
-      const { data: subjects } = await supabase.from("Subject")
-        .select("id, name").in("id", subjectIds);
-      (subjects ?? []).forEach(s => subjectMap.set(s.id, s));
-    }
-  }
+let groupMap = new Map<number, { id:number; code:string|null; subjectId:number|null }>();
+let subjectMap = new Map<number, { id:number; name:string|null }>();
 
-  const classes = (sessions ?? []).map(s => {
-    const g = s.group_id ? groupMap.get(s.group_id) ?? null : null;
-    const subj = g?.subjectId ? subjectMap.get(g.subjectId) ?? null : null;
-    const hhmm = hhmmFrom(s.start_planned);
-    return {
-      id: s.id,
-      date: s.session_date,
-      time: hhmm,
-      room: s.room_code,
-      status: s.status,
-      isManual: !!s.is_manual,
-      startedAt: s.started_at,
-      endedAt: s.ended_at,
-      groupCode: g?.code ?? null,
-      subjectName: subj?.name ?? null,
-      withinWindow: withinPlannedWindow(s.session_date, hhmm, s.is_manual),
-    };
-  });
+if (groupIds.length) {
+  const { data: groups } = await supabase.from("Group").select("id, code, subjectId").in("id", groupIds);
+  (groups ?? []).forEach(g => groupMap.set(g.id, g));
+}
+const subjectIds = Array.from(new Set([
+  ...sessionSubjectIds,
+  ...Array.from(groupMap.values()).map(g => g.subjectId).filter(Boolean) as number[],
+]));
+
+if (subjectIds.length) {
+  const { data: subjects } = await supabase.from("Subject").select("id, name").in("id", subjectIds);
+  (subjects ?? []).forEach(s => subjectMap.set(s.id, s));
+}
+
+const classes = (sessions ?? []).map((s:any) => {
+  const g = s.group_id ? groupMap.get(s.group_id) ?? null : null;
+  const subjectId = s.subjectId ?? g?.subjectId ?? null;
+  const subjectName = subjectId ? subjectMap.get(subjectId)?.name ?? null : null;
+  // ... (lo demás igual)
+  return { /* ... */, subjectName };
+});
 
   // MIS MATERIAS (distintas por las que tiene sesiones)
   const distinctSubjects = Array.from(
