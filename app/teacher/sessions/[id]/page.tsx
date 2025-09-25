@@ -22,7 +22,7 @@ type SessionRow = {
   status: string | null;
 };
 
-type GroupRow = { id: number; code: string | null; termId: number | null };
+type GroupRow = { id: number; code: string | null; termId: number | null; subjectId: number | null };
 type TermRow = { id: number; name: string | null };
 
 function hhmmFromStart(startPlanned?: string | null, slotStart?: string | null) {
@@ -70,7 +70,7 @@ export default async function SessionPage({ params }: { params: { id: string } }
   let slotStart: string | null = null;
 
   if (s.group_id) {
-    const { data: g } = await supabase.from("Group").select("id, code, termId").eq("id", s.group_id).maybeSingle<GroupRow>();
+    const { data: g } = await supabase.from("Group").select("id, code, termId, subjectId").eq("id", s.group_id).maybeSingle<GroupRow>();
     group = g ?? null;
     if (group?.termId) {
       const { data: tt } = await supabase.from("Term").select("id, name").eq("id", group.termId).maybeSingle<TermRow>();
@@ -112,9 +112,17 @@ export default async function SessionPage({ params }: { params: { id: string } }
     if (pr?.email) teacherName = pr.email;
   }
 
-  // Materia: si ya tienes relación, colócala aquí. Por ahora mostramos "—" si no hay.
-  const subjectName: string | null = null; // TODO: enlazar con tu relación real de grupo->materia
-
+ // Materia  
+let subjectName: string | null = null;
+if (group?.subjectId) {
+  const { data: subj } = await supabase
+    .from("Subject")
+    .select("name")
+    .eq("id", group.subjectId)
+    .maybeSingle<{ name: string | null }>();
+  subjectName = subj?.name ?? null;
+}
+  
   // Ventana y botones
   const hhmm = hhmmFromStart(s.start_planned, slotStart);
   const planned = plannedDateFrom(s.session_date, hhmm);
