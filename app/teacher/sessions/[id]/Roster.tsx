@@ -1,9 +1,7 @@
 // app/teacher/sessions/[id]/Roster.tsx
 "use client";
-import { useEffect, useMemo, useState } from "react";
-// Ajusta este import a tu browser client real:
-import { browserClient as supabase } from "@/lib/supabase/browserClient";
-// Si no tienes "browserClient", expórtalo como "supabase" y cambia la línea de arriba.
+import { useEffect, useState } from "react";
+import supabase from "@/lib/supabase/browserClient";
 
 type Row = {
   student_id: string;
@@ -11,6 +9,13 @@ type Row = {
   status: "Presente" | "Tarde" | "Ausente" | "Justificado" | null;
   updated_at?: string | null;
 };
+
+const STATUSES: Array<NonNullable<Row["status"]>> = [
+  "Presente",
+  "Tarde",
+  "Ausente",
+  "Justificado",
+];
 
 export default function Roster({
   sessionId,
@@ -23,79 +28,98 @@ export default function Roster({
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string>("");
 
- async function load() {
-  setLoading(true);
-  setErr("");
-  try {
-    // 1) PRIMERO: attendance de la sesión (si existe, lo mostramos)
-    const attRes = await supabase
-      .from("attendance")
-      .select("student_id, student_name, status, updated_at")
-      .eq("session_id", sessionId);
+  async function load() {
+    setLoading(true);
+    setErr("");
+    try {
+      // 1) PRIORIDAD: attendance existente (funciona aunque no haya group_id)
+      const attRes = await supabase
+        .from("attendance")
+        .select("student_id, student_name, status, updated_at")
+        .eq("session_id", sessionId);
 
-    if (!attRes.error && Array.isArray(attRes.data) && attRes.data.length > 0) {
-      setRows(attRes.data.map((a: any) => ({
-        student_id: String(a.student_id),
-        student_name: a.student_name || "—",
-        status: a.status ?? null,
-        updated_at: a.updated_at ?? null,
-      })));
-      setLoading(false);
-      return;
-    }
-
-    // 2) Si no hay attendance, intenta la vista v_session_roster
-    const vrowsRes = await supabase
-      .from("v_session_roster")
-      .select("student_id, student_name, status, updated_at")
-      .eq("session_id", sessionId);
-
-    if (!vrowsRes.error && Array.isArray(vrowsRes.data) && vrowsRes.data.length > 0) {
-      setRows(vrowsRes.data.map((r: any) => ({
-        student_id: String(r.student_id),
-        student_name: r.student_name || "—",
-        status: r.status ?? null,
-        updated_at: r.updated_at ?? null,
-      })));
-      setLoading(false);
-      return;
-    }
-
-    // 3) Último fallback: si no hay groupId, no hay roster por Enrollment
-    if (!groupId) { setRows([]); setLoading(false); return; }
-
-    // Enrollment fallback (opcional)
-    let studentIds: string[] = [];
-    const e1 = await supabase.from("Enrollment").select("student_user_id").eq("group_id", groupId);
-    if (!e1.error && Array.isArray(e1.data) && e1.data.length > 0) {
-      studentIds = e1.data.map((r: any) => String(r.student_user_id));
-    } else {
-      const e2 = await supabase.from("Enrollment").select("student_id").eq("group_id", groupId);
-      if (!e2.error && Array.isArray(e2.data)) {
-        studentIds = e2.data.map((r: any) => String(r.student_id));
+      if (!attRes.error && Array.isArray(attRes.data) && attRes.data.length > 0) {
+        setRows(
+          attRes.data.map((a: any) => ({
+            student_id: String(a.student_id),
+            student_name: a.student_name || "—",
+            status: (a.status as any) ?? null,
+            updated_at: a.updated_at ?? null,
+          }))
+        );
+        setLoading(false);
+        return;
       }
-    }
 
-    const profs = await supabase.from("profiles").select("user_id, email").in("user_id", studentIds);
-    const byId: Record<string, string> = {};
-    if (!profs.error && Array.isArray(profs.data)) {
-      profs.data.forEach((p: any) => (byId[String(p.user_id)] = p.email));
-    }
+      // 2) Vista v_session_roster (si hay Enrollment)
+      const vrowsRes = await supabase
+        .from("v_session_roster")
+        .select("student_id, student_name, status, updated_at")
+        .eq("session_id", sessionId);
 
-    setRows(studentIds.map((id) => ({
-      student_id: id,
-      student_name: byId[id] || "—",
-      status: null,
-      updated_at: null,
-    })));
-  } catch (e: any) {
-    setErr(e.message || String(e));
-  } finally {
-    setLoading(false);
+      if (!vrowsRes.error && Array.isArray(vrowsRes.data) && vrowsRes.data.length > 0) {
+        setRows(
+          vrowsRes.data.map((r: any) => ({
+            student_id: String(r.student_id),
+            student_name: r.student_name || "—",
+            status: (r.status as any) ?? null,
+            updated_at: r.updated_at ?? null,
+          }))
+        );
+        setLoading(false);
+        return;
+      }
+
+      // 3) Fallback simple si no hay groupId ni attendance
+      if (!groupId) {
+        setRows([]);
+        setLoading(false);
+        return;
+      }
+
+      // 4) Enrollment (dos variantes de columna)
+      let studentIds: string[] = [];
+      const e1 = await supabase
+        .from("Enrollment")
+        .select("student_user_id")
+        .eq("group_id", groupId);
+
+      if (!e1.error && Array.isArray(e1.data) && e1.data.length > 0) {
+        studentIds = e1.data.map((r: any) => String(r.student_user_id));
+      } else {
+        const e2 = await supabase
+          .from("Enrollment")
+          .select("student_id")
+          .eq("group_id", groupId);
+        if (!e2.error && Array.isArray(e2.data)) {
+          studentIds = e2.data.map((r: any) => String(r.student_id));
+        }
+      }
+
+      const profs = await supabase
+        .from("profiles")
+        .select("user_id, email")
+        .in("user_id", studentIds);
+
+      const byId: Record<string, string> = {};
+      if (!profs.error && Array.isArray(profs.data)) {
+        profs.data.forEach((p: any) => (byId[String(p.user_id)] = p.email));
+      }
+
+      setRows(
+        studentIds.map((id) => ({
+          student_id: id,
+          student_name: byId[id] || "—",
+          status: null,
+          updated_at: null,
+        }))
+      );
+    } catch (e: any) {
+      setErr(e.message || String(e));
+    } finally {
+      setLoading(false);
+    }
   }
-}
-
-
 
   useEffect(() => {
     load();
@@ -128,29 +152,42 @@ export default function Roster({
   return (
     <div className="border rounded">
       <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
-        <div className="col-span-6">Alumno</div>
-        <div className="col-span-3">Estado</div>
-        <div className="col-span-3">Acciones</div>
+        <div className="col-span-6 text-black">Alumno</div>
+        <div className="col-span-3 text-black">Estado</div>
+        <div className="col-span-3 text-black">Acciones</div>
       </div>
       <div>
         {rows.map((r) => (
           <div key={r.student_id} className="grid grid-cols-12 items-center border-t px-3 py-2 text-sm">
             <div className="col-span-6 break-words">{r.student_name}</div>
-            <div className="col-span-3">{r.status ?? "—"}</div>
+            <div className="col-span-3">
+              {r.status ?? "—"}
+            </div>
             <div className="col-span-3 flex gap-1 flex-wrap">
-              {["Presente", "Tarde", "Ausente", "Justificado"].map((st) => (
-                <button
-                  key={st}
-                  onClick={() => setStatus(r.student_id, r.student_name, st as any)}
-                  className="px-2 py-1 border rounded text-xs"
-                >
-                  {st}
-                </button>
-              ))}
+              {STATUSES.map((st) => {
+                const isCurrent = r.status === st;
+                return (
+                  <button
+                    key={st}
+                    onClick={() => setStatus(r.student_id, r.student_name, st)}
+                    className={
+                      "px-2 py-1 border rounded text-xs " +
+                      (isCurrent ? "bg-black text-white" : "hover:bg-gray-100")
+                    }
+                    title={isCurrent ? "Estado actual" : ""}
+                  >
+                    {st}
+                  </button>
+                );
+              })}
             </div>
           </div>
         ))}
-        {!rows.length && <div className="p-4 text-sm opacity-70">Sin alumnos ligados a esta sesión.</div>}
+        {!rows.length && (
+          <div className="p-4 text-sm opacity-70">
+            Sin alumnos ligados a esta sesión.
+          </div>
+        )}
       </div>
     </div>
   );
