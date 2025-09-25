@@ -10,13 +10,12 @@ type ClassItem = {
   groupCode: string | null; subjectName: string | null; withinWindow: boolean;
 };
 export default function ProfileTabs({
-  profile,
-  classes,
-  subjects,
+  profile, classes, subjects, teacher,
 }: {
   profile: { email: string; role: string };
-  classes: ClassItem[];
-  subjects: { name: string; groupCode: string | null }[];
+  classes: any[];
+  subjects: any[];
+  teacher: any | null;
 }) {
   const [tab, setTab] = useState<"perfil"|"clases"|"materias">("perfil");
 
@@ -40,23 +39,38 @@ export default function ProfileTabs({
       </div>
 
       {tab === "perfil" && (
-  <div className="space-y-4">
-    <div className="flex items-start justify-between">
-      <div>
-        <div><b>Email:</b> {profile.email}</div>
-        <div><b>Rol:</b> {profile.role}</div>
+    <div className="space-y-4">
+      <div className="flex items-start justify-between">
+        <div>
+          <div><b>Email:</b> {profile.email}</div>
+          <div><b>Rol:</b> {profile.role}</div>
+        </div>
+        <a href="/logout" className="px-3 py-2 rounded border shadow-sm hover:bg-gray-50">Cerrar sesión</a>
       </div>
-      <a
-        href="/logout"
-        className="px-3 py-2 rounded border shadow-sm hover:bg-gray-50"
-        title="Cerrar sesión"
-      >
-        Cerrar sesión
-      </a>
+
+      {teacher && (
+        <div className="border rounded p-4">
+          <h3 className="font-medium mb-3">Datos del docente</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2 text-sm">
+            <div><b>Nombre:</b> {[teacher.first_name, teacher.last_name].filter(Boolean).join(" ") || "—"}</div>
+            <div><b>Edad:</b> {teacher.edad ?? "—"}</div>
+            <div><b>CURP:</b> {teacher.curp ?? "—"}</div>
+            <div><b>RFC:</b> {teacher.rfc ?? "—"}</div>
+            <div><b>Dirección:</b> {teacher.direccion ?? "—"}</div>
+            <div><b>Plantel:</b> {teacher.plantel ?? "—"}</div>
+            <div><b>Licenciatura:</b> {teacher.licenciatura ?? "—"}</div>
+            <div><b>Cédula Lic.:</b> {teacher.cedula_lic ?? "—"}</div>
+            <div><b>Maestría:</b> {teacher.maestria ?? "—"}</div>
+            <div><b>Cédula Maest.:</b> {teacher.cedula_maest ?? "—"}</div>
+            <div><b>Doctorado:</b> {teacher.doctorado ?? "—"}</div>
+            <div><b>Cédula Doct.:</b> {teacher.cedula_doct ?? "—"}</div>
+            <div><b>Estado civil:</b> {teacher.estado_civil ?? "—"}</div>
+            <div><b>Nacionalidad:</b> {teacher.nacionalidad ?? "—"}</div>
+          </div>
+        </div>
+      )}
     </div>
-    {/* debajo irá la ficha completa del docente (punto 3) */}
-  </div>
-)}
+  )}
 
 
       {tab === "clases" && (
