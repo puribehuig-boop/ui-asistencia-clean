@@ -113,13 +113,15 @@ export default async function SessionPage({ params }: { params: { id: string } }
     if (pr?.email) teacherName = pr.email;
   }
 
- // Materia  
+ // Materia: sessions.subjectId primero; si falta, Group.subjectId
 let subjectName: string | null = null;
-if (group?.subjectId) {
+const chosenSubjectId = s.subjectId ?? (group?.subjectId ?? null);
+
+if (chosenSubjectId != null) {
   const { data: subj } = await supabase
     .from("Subject")
     .select("name")
-    .eq("id", group.subjectId)
+    .eq("id", chosenSubjectId)
     .maybeSingle<{ name: string | null }>();
   subjectName = subj?.name ?? null;
 }
