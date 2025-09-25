@@ -172,17 +172,20 @@ useEffect(() => {
             </div>
           </div>
 
-          {/* Accesos rápidos */}
+                   {/* Accesos rápidos */}
           <div className="border rounded p-4">
             <h3 className="font-medium mb-2">Accesos rápidos</h3>
-            <div className="flex flex-wrap gap-2">
-              <button onClick={() => setTab("horario")} className="px-3 py-2 rounded border">Ver mi horario</button>
-              <button onClick={() => setTab("asistencia")} className="px-3 py-2 rounded border">Ver mi asistencia</button>
-              <button onClick={() => setTab("calificaciones")} className="px-3 py-2 rounded border">Ver mis calificaciones</button>
-              <button onClick={() => setTab("materias")} className="px-3 py-2 rounded border">Mis materias</button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="border rounded p-3">
+                <div className="text-sm font-medium">Buzón anónimo</div>
+                <div className="text-xs opacity-60">Próximamente</div>
+              </div>
+              <div className="border rounded p-3">
+                <div className="text-sm font-medium">Mis trámites</div>
+                <div className="text-xs opacity-60">Próximamente</div>
+              </div>
             </div>
           </div>
-        </div>
       )}
 
       {tab === "horario" && (
