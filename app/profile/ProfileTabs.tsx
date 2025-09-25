@@ -10,15 +10,16 @@ type ClassItem = {
   groupCode: string | null; subjectName: string | null; withinWindow: boolean;
 };
 export default function ProfileTabs({
-  profile, classes, subjects, teacher,
+  profile, classes, subjects, teacher, groups,
 }: {
   profile: { email: string; role: string };
   classes: any[];
   subjects: any[];
   teacher: any | null;
+  groups: { id:number; code:string|null; termName:string|null; subjectName:string|null }[];
 }) {
-  const [tab, setTab] = useState<"perfil"|"clases"|"materias">("perfil");
-
+  const [tab, setTab] = useState<"perfil"|"clases"|"materias"|"grupos">("perfil");
+  
   async function post(path: string, payload: any) {
     await fetch(path, {
       method: "POST",
@@ -36,6 +37,7 @@ export default function ProfileTabs({
         <button onClick={() => setTab("perfil")} className={"px-3 py-2 " + (tab==="perfil" ? "border-b-2 border-black" : "")}>Perfil</button>
         <button onClick={() => setTab("clases")} className={"px-3 py-2 " + (tab==="clases" ? "border-b-2 border-black" : "")}>Mis clases</button>
         <button onClick={() => setTab("materias")} className={"px-3 py-2 " + (tab==="materias" ? "border-b-2 border-black" : "")}>Mis materias</button>
+        <button onClick={() => setTab("grupos")} className={"px-3 py-2 " + (tab==="materias" ? "border-b-2 border-black" : "")}>Mis grupos</button>
       </div>
 
       {tab === "perfil" && (
@@ -132,5 +134,22 @@ export default function ProfileTabs({
         </div>
       )}
     </div>
+
+    {tab === "grupos" && (
+    <div className="space-y-2">
+      {!groups.length && <div className="opacity-70">Aún no tienes grupos asignados.</div>}
+      {groups.map(g => (
+        <div key={g.id} className="border rounded p-3 flex items-center justify-between">
+          <div className="space-y-0.5">
+            <div className="text-base"><b>{g.code ?? `Grupo #${g.id}`}</b></div>
+            <div className="text-sm opacity-70">
+              Materia: <b>{g.subjectName ?? "—"}</b> · Periodo: <b>{g.termName ?? "—"}</b>
+            </div>
+          </div>
+          <a href={`/teacher/groups/${g.id}`} className="px-3 py-2 rounded border">Ver grupo</a>
+        </div>
+      ))}
+    </div>
+  )}
   );
 }
