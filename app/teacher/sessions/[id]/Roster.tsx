@@ -23,56 +23,48 @@ export default function Roster({
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string>("");
 
-  async function load() {
+ async function load() {
   setLoading(true);
   setErr("");
   try {
-    // 1) PRIMERO: intenta leer attendance existente de la sesión (más directo)
+    // 1) PRIMERO: attendance de la sesión (si existe, lo mostramos)
     const attRes = await supabase
       .from("attendance")
       .select("student_id, student_name, status, updated_at")
       .eq("session_id", sessionId);
 
     if (!attRes.error && Array.isArray(attRes.data) && attRes.data.length > 0) {
-      setRows(
-        attRes.data.map((a: any) => ({
-          student_id: String(a.student_id),
-          student_name: a.student_name || "—",
-          status: a.status ?? null,
-          updated_at: a.updated_at ?? null,
-        }))
-      );
+      setRows(attRes.data.map((a: any) => ({
+        student_id: String(a.student_id),
+        student_name: a.student_name || "—",
+        status: a.status ?? null,
+        updated_at: a.updated_at ?? null,
+      })));
       setLoading(false);
       return;
     }
 
-    // 2) Si no hay attendance (o no se puede leer), intenta la vista v_session_roster
+    // 2) Si no hay attendance, intenta la vista v_session_roster
     const vrowsRes = await supabase
       .from("v_session_roster")
       .select("student_id, student_name, status, updated_at")
       .eq("session_id", sessionId);
 
     if (!vrowsRes.error && Array.isArray(vrowsRes.data) && vrowsRes.data.length > 0) {
-      setRows(
-        vrowsRes.data.map((r: any) => ({
-          student_id: String(r.student_id),
-          student_name: r.student_name || "—",
-          status: r.status ?? null,
-          updated_at: r.updated_at ?? null,
-        }))
-      );
+      setRows(vrowsRes.data.map((r: any) => ({
+        student_id: String(r.student_id),
+        student_name: r.student_name || "—",
+        status: r.status ?? null,
+        updated_at: r.updated_at ?? null,
+      })));
       setLoading(false);
       return;
     }
 
-    // 3) Último fallback: Enrollment → profiles (sólo si hay groupId)
-    if (!groupId) {
-      setRows([]);
-      setLoading(false);
-      return;
-    }
+    // 3) Último fallback: si no hay groupId, no hay roster por Enrollment
+    if (!groupId) { setRows([]); setLoading(false); return; }
 
-    // Enrollment: intenta student_user_id, luego student_id
+    // Enrollment fallback (opcional)
     let studentIds: string[] = [];
     const e1 = await supabase.from("Enrollment").select("student_user_id").eq("group_id", groupId);
     if (!e1.error && Array.isArray(e1.data) && e1.data.length > 0) {
@@ -84,30 +76,25 @@ export default function Roster({
       }
     }
 
-    const profs = await supabase
-      .from("profiles")
-      .select("user_id, email")
-      .in("user_id", studentIds);
-
+    const profs = await supabase.from("profiles").select("user_id, email").in("user_id", studentIds);
     const byId: Record<string, string> = {};
     if (!profs.error && Array.isArray(profs.data)) {
       profs.data.forEach((p: any) => (byId[String(p.user_id)] = p.email));
     }
 
-    setRows(
-      studentIds.map((id) => ({
-        student_id: id,
-        student_name: byId[id] || "—",
-        status: null,
-        updated_at: null,
-      }))
-    );
+    setRows(studentIds.map((id) => ({
+      student_id: id,
+      student_name: byId[id] || "—",
+      status: null,
+      updated_at: null,
+    })));
   } catch (e: any) {
     setErr(e.message || String(e));
   } finally {
     setLoading(false);
   }
 }
+
 
 
   useEffect(() => {
