@@ -53,14 +53,15 @@ function hhmmFrom(startPlanned: string | null): string | null {
   return null;
 }
 
-function withinPlannedWindow(sessionDate: string | null, hhmm: string | null, isManual: boolean | null): boolean {
+function withinPlannedWindow(sessionDate: string | null, hhmm: string | null, isManual: boolean | null, endedAt: string | null) {
+  if (endedAt) return false;      // ← terminó = fuera de ventana
   if (isManual) return true;
   if (!sessionDate || !hhmm) return false;
   const planned = new Date(`${sessionDate}T${hhmm}:00`);
   if (isNaN(planned.getTime())) return false;
   const now = new Date();
   const from = new Date(planned.getTime() - 30 * 60 * 1000);
-  const to = new Date(planned.getTime() + 30 * 60 * 1000);
+  const to   = new Date(planned.getTime() + 30 * 60 * 1000);
   return now >= from && now <= to;
 }
 
@@ -149,7 +150,7 @@ export default async function ProfilePage() {
       endedAt: s.ended_at,
       groupCode: group?.code ?? null,
       subjectName,
-      withinWindow: withinPlannedWindow(s.session_date, time, s.is_manual),
+      withinWindow: withinPlannedWindow(s.session_date, time, s.is_manual, s.ended_at),
     };
   });
 
