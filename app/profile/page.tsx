@@ -50,12 +50,13 @@ export default async function ProfilePage() {
   const to   = new Date(today.getTime() +  7 * 86400000).toISOString().slice(0,10);
 
   const { data: sessions } = await supabase
-    .from("sessions")
-    .select("id, session_date, start_planned, room_code, status, is_manual, started_at, ended_at, group_id")
-    .eq("teacher_user_id", auth.user.id)
-    .gte("session_date", from)
-    .lte("session_date", to)
-    .order("session_date", { ascending: true });
+  .from("sessions")
+  .select("id, session_date, start_planned, room_code, status, is_manual, started_at, ended_at, group_id, subjectId") // ← agregamos subjectId (ver SQL abajo)
+  .eq("teacher_user_id", auth.user.id)
+  .order("session_date", { ascending: false })
+  .order("id", { ascending: false })
+  .limit(100);
+
 
   // Enriquecer con group/subject
   const groupIds = Array.from(new Set((sessions ?? []).map(s => s.group_id).filter(Boolean))) as number[];
