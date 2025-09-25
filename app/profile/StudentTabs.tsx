@@ -36,22 +36,20 @@ export default function StudentTabs({
   // ========= Helpers para el Dashboard =========
   function toDateTime(d: string | null, t: string | null): Date | null {
     if (!d) return null;
-    // Si no hay hora, tomamos 00:00
     const hhmm = t && /^\d{2}:\d{2}$/.test(t) ? t : "00:00";
     const isoLike = `${d}T${hhmm}:00`;
     const dt = new Date(isoLike);
     return isNaN(dt.getTime()) ? null : dt;
   }
 
-  const now = new Date();
-
   const upcoming = useMemo<{ c: MyClass; start: Date | null } | null>(() => {
-  const future = classes
-    .map(c => ({ c, start: toDateTime(c.date, c.time) }))
-    .filter(x => x.start && x.start.getTime() > now.getTime())
-    .sort((a, b) => (a.start!.getTime() - b.start!.getTime()));
-  return future.length ? future[0] : null;
-}, [classes]);
+    const now = Date.now();
+    const future = classes
+      .map(c => ({ c, start: toDateTime(c.date, c.time) }))
+      .filter(x => x.start && x.start.getTime() > now)
+      .sort((a, b) => (a.start!.getTime() - b.start!.getTime()));
+    return future.length ? future[0] : null;
+  }, [classes]);
 
   const counts = useMemo(() => {
     const acc = { Presente: 0, Tarde: 0, Ausente: 0, Justificado: 0, Total: 0 };
@@ -72,25 +70,27 @@ export default function StudentTabs({
   }, [counts]);
 
   // Cuenta regresiva a la próxima clase (si existe y tiene hora)
- const [countdown, setCountdown] = useState<string>("");
+  const [countdown, setCountdown] = useState<string>("");
 
-useEffect(() => {
-  const start = upcoming?.start ?? null;
-  if (!start) { setCountdown(""); return; }
+  useEffect(() => {
+    const start = upcoming?.start ?? null;
+    if (!start) { setCountdown(""); return; }
 
-  const tick = () => {
-    const diff = start.getTime() - Date.now();
-    if (diff <= 0) { setCountdown("¡ya!"); return; }
-    const h = Math.floor(diff / 3_600_000);
-    const m = Math.floor((diff % 3_600_000) / 60_000);
-    const s = Math.floor((diff % 60_000) / 1000);
-    setCountdown(`${h.toString().padStart(2,"0")}:${m.toString().padStart(2,"0")}:${s.toString().padStart(2,"0")}`);
-  };
+    const tick = () => {
+      const diff = start.getTime() - Date.now();
+      if (diff <= 0) { setCountdown("¡ya!"); return; }
+      const h = Math.floor(diff / 3_600_000);
+      const m = Math.floor((diff % 3_600_000) / 60_000);
+      const s = Math.floor((diff % 60_000) / 1000);
+      setCountdown(
+        `${h.toString().padStart(2,"0")}:${m.toString().padStart(2,"0")}:${s.toString().padStart(2,"0")}`
+      );
+    };
 
-  tick();
-  const id = setInterval(tick, 1000);
-  return () => clearInterval(id);
-}, [upcoming?.start?.getTime()]);
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [upcoming?.start?.getTime()]);
 
   // ========= UI =========
   return (
@@ -172,7 +172,7 @@ useEffect(() => {
             </div>
           </div>
 
-                   {/* Accesos rápidos */}
+          {/* Accesos rápidos: placeholders */}
           <div className="border rounded p-4">
             <h3 className="font-medium mb-2">Accesos rápidos</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -186,6 +186,7 @@ useEffect(() => {
               </div>
             </div>
           </div>
+        </div>
       )}
 
       {tab === "horario" && (
