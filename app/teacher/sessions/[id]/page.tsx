@@ -39,7 +39,9 @@ function plannedDateFrom(sessionDate?: string | null, hhmm?: string | null) {
   const d = new Date(`${sessionDate}T${hhmm}:00`);
   return isNaN(d.getTime()) ? null : d;
 }
-function isWithinWindow(now: Date, planned: Date | null, isManual: boolean | null, minutes = 30) {
+function isWithinWindow(now: Date, planned: Date | null, isManual: boolean | null, endedAt: string | null, minutes = 30) {
+  // Si ya terminó, siempre fuera de ventana (aplica también a manuales)
+  if (endedAt) return false;
   if (isManual) return true;
   if (!planned) return false;
   const from = new Date(planned.getTime() - minutes * 60 * 1000);
@@ -129,7 +131,7 @@ if (chosenSubjectId != null) {
   // Ventana y botones
   const hhmm = hhmmFromStart(s.start_planned, slotStart);
   const planned = plannedDateFrom(s.session_date, hhmm);
-  const within = isWithinWindow(new Date(), planned, !!s.is_manual, 30);
+  const within = isWithinWindow(new Date(), planned, !!s.is_manual, s.ended_at, 30);
   const canStart = !s.started_at && within;
   const canFinish = !!s.started_at && !s.ended_at && within;
 
