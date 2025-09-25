@@ -40,14 +40,24 @@ export default function ProfileTabs({
       </div>
 
       {tab === "perfil" && (
-        <div className="space-y-2">
-          <div><b>Email:</b> {profile.email}</div>
-          <div><b>Rol:</b> {profile.role}</div>
-          <div className="mt-4">
-            <Link href="/logout" className="underline">Cerrar sesión</Link>
-          </div>
-        </div>
-      )}
+  <div className="space-y-4">
+    <div className="flex items-start justify-between">
+      <div>
+        <div><b>Email:</b> {profile.email}</div>
+        <div><b>Rol:</b> {profile.role}</div>
+      </div>
+      <a
+        href="/logout"
+        className="px-3 py-2 rounded border shadow-sm hover:bg-gray-50"
+        title="Cerrar sesión"
+      >
+        Cerrar sesión
+      </a>
+    </div>
+    {/* debajo irá la ficha completa del docente (punto 3) */}
+  </div>
+)}
+
 
       {tab === "clases" && (
         <div className="space-y-3">
