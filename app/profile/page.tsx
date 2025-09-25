@@ -133,6 +133,35 @@ export default async function ProfilePage() {
     (subjects as SubjectRow[] | null ?? []).forEach((s: any) => subjectMap.set(s.id, s));
   }
 
+  // Grupos del docente (con materia y periodo)
+const { data: myGroups } = await supabase
+  .from("Group")
+  .select("id, code, subjectId, termId")
+  .eq("teacher_user_id", uid)
+  .order("code", { ascending: true });
+
+const termIds = Array.from(new Set((myGroups ?? []).map(g => g.termId).filter(Boolean))) as number[];
+const subjIds = Array.from(new Set((myGroups ?? []).map(g => g.subjectId).filter(Boolean))) as number[];
+
+const termMap = new Map<number, { id:number; name:string|null }>();
+if (termIds.length) {
+  const { data: terms } = await supabase.from("Term").select("id, name").in("id", termIds);
+  (terms ?? []).forEach(t => termMap.set(t.id, t));
+}
+
+const subjMap = new Map<number, { id:number; name:string|null }>();
+if (subjIds.length) {
+  const { data: subjs } = await supabase.from("Subject").select("id, name").in("id", subjIds);
+  (subjs ?? []).forEach(s => subjMap.set(s.id, s));
+}
+
+const groups = (myGroups ?? []).map(g => ({
+  id: g.id,
+  code: g.code,
+  termName: g.termId ? termMap.get(g.termId)?.name ?? null : null,
+  subjectName: g.subjectId ? subjMap.get(g.subjectId)?.name ?? null : null,
+}));
+  
   // Construir clases enriquecidas
   const classes = (sessions as SessionRow[] | null ?? []).map((s) => {
     const group = s.group_id ? groupMap.get(s.group_id) ?? null : null;
@@ -169,6 +198,7 @@ export default async function ProfilePage() {
       classes={classes}
       subjects={subjects}
       teacher={teacher ?? null}
+      groups={groups} 
     />
   );
 }
