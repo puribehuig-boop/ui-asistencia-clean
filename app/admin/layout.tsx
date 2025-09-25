@@ -1,57 +1,58 @@
 // app/admin/layout.tsx
 import { createSupabaseServerClient } from "@/lib/supabase/serverClient";
-import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
+import Link from "next/link";
+import React from "react";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-export const fetchCache = "force-no-store";
-
-type Profile = { user_id: string; email: string | null; role: "admin" | "docente" };
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const supabase = createSupabaseServerClient();
-  const { data, error } = await supabase.auth.getUser();
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth?.user) redirect("/login");
 
-  if (error || !data?.user) {
-    redirect("/login");
-  }
+  const { data: me } = await supabase
+    .from("profiles")
+    .select("email, role")
+    .eq("user_id", auth.user.id)
+    .maybeSingle();
 
-  const rows = await prisma.$queryRaw<Profile[]>`
-    SELECT user_id, email, role
-    FROM public.profiles
-    WHERE user_id = CAST(${data.user.id} AS uuid)
-    LIMIT 1
-  `;
-  const profile = rows[0] ?? null;
-
-  if (!profile || profile.role !== "admin") {
-    return (
-      <main className="max-w-xl mx-auto p-6">
-        <h1 className="text-xl font-semibold mb-3">Acceso restringido</h1>
-        <p>No cuentas con permisos para ver esta sección.</p>
-        <p className="mt-2 text-sm opacity-70">
-          Usuario: {data.user.email ?? data.user.id}
-        </p>
-      </main>
-    );
+  if (me?.role !== "admin") {
+    // Si no es admin, lo regresamos a su perfil
+    redirect("/profile");
   }
 
   return (
-    <div className="max-w-5xl mx-auto p-6">
-      <header className="mb-6">
-        <h1 className="text-2xl font-semibold">Panel Admin</h1>
-        <nav className="flex gap-4 mt-3 text-sm">
-          <a href="/admin" className="underline-offset-4 hover:underline">Inicio</a>
-          <a href="/admin/programs" className="underline-offset-4 hover:underline">Programas</a>
-          <a href="/admin/subjects" className="underline-offset-4 hover:underline">Materias</a>
-          <a href="/admin/terms" className="underline-offset-4 hover:underline">Periodos</a>
-          <a href="/admin/groups" className="underline-offset-4 hover:underline">Grupos</a>
-          <a href="/logout" className="underline-offset-4 hover:underline">Salir</a>
+    <div className="min-h-screen grid grid-cols-[240px_1fr]">
+      <aside className="border-r p-4">
+        <div className="mb-4">
+          <div className="text-sm opacity-60">Conectado como</div>
+          <div className="text-sm break-all">{me?.email ?? auth.user.email}</div>
+          <div className="text-xs opacity-60">Rol: admin</div>
+        </div>
+
+        <nav className="space-y-1 text-sm">
+          <Link href="/admin" className="block px-2 py-1 rounded hover:bg-gray-50">Inicio</Link>
+
+          <div className="mt-3 text-xs uppercase opacity-60 px-2">Catálogos</div>
+          <Link href="/admin/programs" className="block px-2 py-1 rounded hover:bg-gray-50">Programas</Link>
+          <Link href="/admin/subjects" className="block px-2 py-1 rounded hover:bg-gray-50">Materias</Link>
+          <Link href="/admin/terms" className="block px-2 py-1 rounded hover:bg-gray-50">Periodos</Link>
+          <Link href="/admin/groups" className="block px-2 py-1 rounded hover:bg-gray-50">Grupos</Link>
+
+          <div className="mt-3 text-xs uppercase opacity-60 px-2">Operación</div>
+          <Link href="/admin/sessions" className="block px-2 py-1 rounded hover:bg-gray-50">Sesiones</Link>
+          <Link href="/admin/users" className="block px-2 py-1 rounded hover:bg-gray-50">Usuarios</Link>
+          <Link href="/admin/reports" className="block px-2 py-1 rounded hover:bg-gray-50">Reportes</Link>
         </nav>
-      </header>
-      {children}
+
+        <div className="mt-6">
+          <a href="/logout" className="text-sm px-2 py-1 rounded border inline-block">Cerrar sesión</a>
+        </div>
+      </aside>
+
+      <main className="p-6">{children}</main>
     </div>
   );
 }
