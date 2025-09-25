@@ -45,14 +45,13 @@ export default function StudentTabs({
 
   const now = new Date();
 
-  const upcoming = useMemo(() => {
-    // próxima clase futura (fecha+hora si hay, o por fecha si no hay hora)
-    const future = classes
-      .map(c => ({ c, start: toDateTime(c.date, c.time) }))
-      .filter(x => x.start && x.start.getTime() > now.getTime())
-      .sort((a, b) => (a.start!.getTime() - b.start!.getTime()));
-    return future.length ? future[0] : null;
-  }, [classes]);
+  const upcoming = useMemo<{ c: MyClass; start: Date | null } | null>(() => {
+  const future = classes
+    .map(c => ({ c, start: toDateTime(c.date, c.time) }))
+    .filter(x => x.start && x.start.getTime() > now.getTime())
+    .sort((a, b) => (a.start!.getTime() - b.start!.getTime()));
+  return future.length ? future[0] : null;
+}, [classes]);
 
   const counts = useMemo(() => {
     const acc = { Presente: 0, Tarde: 0, Ausente: 0, Justificado: 0, Total: 0 };
@@ -73,22 +72,25 @@ export default function StudentTabs({
   }, [counts]);
 
   // Cuenta regresiva a la próxima clase (si existe y tiene hora)
-  const [countdown, setCountdown] = useState<string>("");
-  useEffect(() => {
-    if (!upcoming?.start) { setCountdown(""); return; }
-    const tick = () => {
-      const diff = upcoming.start.getTime() - Date.now();
-      if (diff <= 0) { setCountdown("¡ya!"); return; }
-      const h = Math.floor(diff / 3_600_000);
-      const m = Math.floor((diff % 3_600_000) / 60_000);
-      const s = Math.floor((diff % 60_000) / 1000);
-      setCountdown(`${h.toString().padStart(2,"0")}:${m.toString().padStart(2,"0")}:${s.toString().padStart(2,"0")}`);
-    };
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [upcoming?.start?.getTime()]);
+ const [countdown, setCountdown] = useState<string>("");
+
+useEffect(() => {
+  const start = upcoming?.start ?? null;
+  if (!start) { setCountdown(""); return; }
+
+  const tick = () => {
+    const diff = start.getTime() - Date.now();
+    if (diff <= 0) { setCountdown("¡ya!"); return; }
+    const h = Math.floor(diff / 3_600_000);
+    const m = Math.floor((diff % 3_600_000) / 60_000);
+    const s = Math.floor((diff % 60_000) / 1000);
+    setCountdown(`${h.toString().padStart(2,"0")}:${m.toString().padStart(2,"0")}:${s.toString().padStart(2,"0")}`);
+  };
+
+  tick();
+  const id = setInterval(tick, 1000);
+  return () => clearInterval(id);
+}, [upcoming?.start?.getTime()]);
 
   // ========= UI =========
   return (
