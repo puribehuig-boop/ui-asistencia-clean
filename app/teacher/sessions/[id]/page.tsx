@@ -20,6 +20,7 @@ type SessionRow = {
   session_code: string | null;
   room_code: string | null;
   status: string | null;
+  subjectId: number | null;   // ⬅️ nuevo
 };
 
 type GroupRow = { id: number; code: string | null; termId: number | null; subjectId: number | null };
