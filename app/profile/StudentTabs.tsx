@@ -4,7 +4,7 @@
 import { useState } from "react";
 
 type MyGroup = { id: number; code: string | null; subjectName: string | null; termName: string | null };
-type MyClass = { id: number; date: string | null; time: string | null; room: string | null; status: string | null; myStatus: string; groupId: number; subjectName: string | null };
+type MyClass = { id: number; date: string | null; time: string | null; room: string | null; status: string | null; myStatus: string; groupId: number | null; subjectName: string | null};
 type MyGrade = { groupId: number; subjectName: string | null; final: number | null };
 
 export default function StudentTabs({
