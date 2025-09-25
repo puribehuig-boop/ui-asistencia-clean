@@ -59,7 +59,7 @@ export default async function SessionPage({ params }: { params: { id: string } }
   // Sesión
   const { data: s, error: sErr } = await supabase
     .from("sessions")
-    .select("id, session_date, start_planned, is_manual, started_at, ended_at, group_id, teacher_user_id, teacher_name, teacher_email, session_code, room_code, status")
+    .select("id, session_date, start_planned, is_manual, started_at, ended_at, group_id, teacher_user_id, teacher_name, teacher_email, session_code, room_code, status, subjectId")
     .eq("id", sid)
     .maybeSingle<SessionRow>();
   if (sErr) return <div className="p-6 text-red-600">Error cargando sesión: {sErr.message}</div>;
