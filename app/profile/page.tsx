@@ -44,6 +44,28 @@ export default async function ProfilePage() {
     .eq("user_id", auth.user.id)
     .maybeSingle();
 
+  //INFO DOCENTE
+  const { data: teacher } = await supabase
+  .from("teacher_profile")
+  .select(`
+    first_name, last_name, edad, curp, rfc, direccion, plantel,
+    licenciatura, cedula_lic, maestria, cedula_maest,
+    doctorado, cedula_doct, estado_civil, nacionalidad
+  `)
+  .eq("user_id", auth.user.id)
+  .maybeSingle();
+
+return (
+  <ProfileTabs
+    profile={{ email: me?.email ?? auth.user.email ?? "", role: me?.role ?? "docente" }}
+    classes={classes}
+    subjects={distinctSubjects}
+    teacher={teacher ?? null}
+  />
+);
+
+  
+  
   // MIS CLASES (últimos 14 días y próximos 7)
   const today = new Date();
   const from = new Date(today.getTime() - 14 * 86400000).toISOString().slice(0,10);
