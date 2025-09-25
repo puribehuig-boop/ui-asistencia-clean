@@ -1,11 +1,13 @@
 // app/profile/page.tsx
 import { createSupabaseServerClient } from "@/lib/supabase/serverClient";
 import { redirect } from "next/navigation";
-import ProfileTabs from "./ProfileTabs";
+import ProfileTabs from "./ProfileTabs";   // pestañas del DOCENTE
+import StudentTabs from "./StudentTabs";   // pestañas del ALUMNO
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+// ===== Tipos simples (no exhaustivos) para las filas que usamos =====
 type SessionRow = {
   id: number;
   session_date: string | null;
@@ -24,6 +26,7 @@ type GroupRow = {
   code: string | null;
   subjectId: number | null;
   termId: number | null;
+  teacher_user_id?: string | null;
 };
 
 type SubjectRow = { id: number; name: string | null };
@@ -44,8 +47,9 @@ type TeacherRow = {
   cedula_doct: string | null;
   estado_civil: string | null;
   nacionalidad: string | null;
-};
+} | null;
 
+// ===== Helpers =====
 function hhmmFrom(startPlanned: string | null): string | null {
   if (!startPlanned) return null;
   if (/^\d{4}$/.test(startPlanned)) return `${startPlanned.slice(0, 2)}:${startPlanned.slice(2, 4)}`;
@@ -53,15 +57,21 @@ function hhmmFrom(startPlanned: string | null): string | null {
   return null;
 }
 
-function withinPlannedWindow(sessionDate: string | null, hhmm: string | null, isManual: boolean | null, endedAt: string | null) {
-  if (endedAt) return false;      // ← terminó = fuera de ventana
+function withinPlannedWindow(
+  sessionDate: string | null,
+  hhmm: string | null,
+  isManual: boolean | null,
+  endedAt: string | null
+): boolean {
+  // Si ya terminó, siempre fuera de ventana (incluye manuales)
+  if (endedAt) return false;
   if (isManual) return true;
   if (!sessionDate || !hhmm) return false;
   const planned = new Date(`${sessionDate}T${hhmm}:00`);
   if (isNaN(planned.getTime())) return false;
   const now = new Date();
   const from = new Date(planned.getTime() - 30 * 60 * 1000);
-  const to   = new Date(planned.getTime() + 30 * 60 * 1000);
+  const to = new Date(planned.getTime() + 30 * 60 * 1000);
   return now >= from && now <= to;
 }
 
@@ -71,14 +81,116 @@ export default async function ProfilePage() {
   if (!auth?.user) redirect("/login");
   const uid = auth.user.id;
 
-  // Perfil básico
+  // Perfil básico para rol/email
   const { data: me } = await supabase
     .from("profiles")
     .select("email, role")
     .eq("user_id", uid)
     .maybeSingle();
 
-  // Ficha docente completa
+  const role = (me?.role || "docente").toLowerCase();
+
+  // ========================= ALUMNO =========================
+  if (role === "student" || role === "alumno") {
+    // Mis grupos (vista helper)
+    const { data: mg } = await supabase
+      .from("v_my_groups")
+      .select("group_id, group_code, subject_id, term_id, student_uuid_text")
+      .eq("student_uuid_text", uid);
+
+    const groupIds = Array.from(new Set((mg ?? []).map((g: any) => g.group_id))) as number[];
+    const subjIds = Array.from(
+      new Set((mg ?? []).map((g: any) => g.subject_id).filter((v: any) => v != null))
+    ) as number[];
+    const termIds = Array.from(
+      new Set((mg ?? []).map((g: any) => g.term_id).filter((v: any) => v != null))
+    ) as number[];
+
+    const subjMap = new Map<number, string>();
+    if (subjIds.length) {
+      const { data: subjs } = await supabase
+        .from("Subject")
+        .select("id, name")
+        .in("id", subjIds);
+      (subjs as SubjectRow[] | null ?? []).forEach((s) => subjMap.set(s.id, s.name ?? ""));
+    }
+
+    const termMap = new Map<number, string>();
+    if (termIds.length) {
+      const { data: terms } = await supabase.from("Term").select("id, name").in("id", termIds);
+      (terms as { id: number; name: string | null }[] | null ?? []).forEach((t) =>
+        termMap.set(t.id, t.name ?? "")
+      );
+    }
+
+    const myGroups = (mg ?? []).map((g: any) => ({
+      id: g.group_id as number,
+      code: (g.group_code as string | null) ?? null,
+      subjectName: g.subject_id ? subjMap.get(g.subject_id) ?? null : null,
+      termName: g.term_id ? termMap.get(g.term_id) ?? null : null,
+    }));
+
+    // Mis sesiones (vista helper) con mi estado
+    const { data: ms } = await supabase
+      .from("v_my_sessions")
+      .select(
+        "id, session_date, start_planned, room_code, status, is_manual, started_at, ended_at, group_id, subject_id, student_id_text, my_attendance_status"
+      )
+      .eq("student_id_text", uid)
+      .order("session_date", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(100);
+
+    const classes = (ms ?? []).map((s: any) => {
+      const time = hhmmFrom(s.start_planned ?? null);
+      return {
+        id: s.id as number,
+        date: (s.session_date as string | null) ?? null,
+        time,
+        room: (s.room_code as string | null) ?? null,
+        status: (s.status as string | null) ?? null,
+        myStatus: (s.my_attendance_status as string | null) ?? "—",
+        groupId: (s.group_id as number | null) ?? null,
+        subjectName: s.subject_id ? subjMap.get(s.subject_id) ?? null : null,
+      };
+    });
+
+    // Mis calificaciones (desde roster filtrando mi user_id)
+    let myGrades: { groupId: number; subjectName: string | null; final: number | null }[] = [];
+    if (groupIds.length) {
+      const { data: roster } = await supabase
+        .from("v_group_roster")
+        .select("group_id, student_id_text, final_grade")
+        .in("group_id", groupIds)
+        .eq("student_id_text", uid);
+
+      const subjByGroup = new Map<number, string | null>();
+      (mg ?? []).forEach((g: any) => {
+        subjByGroup.set(
+          g.group_id,
+          g.subject_id ? subjMap.get(g.subject_id) ?? null : null
+        );
+      });
+
+      myGrades = (roster ?? []).map((r: any) => ({
+        groupId: r.group_id as number,
+        subjectName: subjByGroup.get(r.group_id) ?? null,
+        final: (r.final_grade as number | null) ?? null,
+      }));
+    }
+
+    return (
+      <StudentTabs
+        profile={{ email: me?.email ?? auth.user.email ?? "", role: me?.role ?? "student" }}
+        groups={myGroups}
+        classes={classes}
+        grades={myGrades}
+      />
+    );
+  }
+
+  // ========================= DOCENTE (y otros roles) =========================
+  // Ficha docente
   const { data: teacher } = await supabase
     .from("teacher_profile")
     .select(`
@@ -89,7 +201,7 @@ export default async function ProfilePage() {
     .eq("user_id", uid)
     .maybeSingle<TeacherRow>();
 
-  // Todas las sesiones del docente (máx. 100 recientes)
+  // Todas las sesiones del docente (máx 100)
   const { data: sessions } = await supabase
     .from("sessions")
     .select(
@@ -100,7 +212,7 @@ export default async function ProfilePage() {
     .order("id", { ascending: false })
     .limit(100);
 
-  // Mapas de Group y Subject
+  // Mapas de grupo y materia (usando subjectId de sesión o del grupo)
   const groupIds = Array.from(
     new Set((sessions ?? []).map((s: SessionRow) => s.group_id).filter((v): v is number => v != null))
   );
@@ -130,38 +242,9 @@ export default async function ProfilePage() {
       .from("Subject")
       .select("id, name")
       .in("id", subjectIds);
-    (subjects as SubjectRow[] | null ?? []).forEach((s: any) => subjectMap.set(s.id, s));
+    (subjects as SubjectRow[] | null ?? []).forEach((s) => subjectMap.set(s.id, s));
   }
 
-  // Grupos del docente (con materia y periodo)
-const { data: myGroups } = await supabase
-  .from("Group")
-  .select("id, code, subjectId, termId")
-  .eq("teacher_user_id", uid)
-  .order("code", { ascending: true });
-
-const termIds = Array.from(new Set((myGroups ?? []).map(g => g.termId).filter(Boolean))) as number[];
-const subjIds = Array.from(new Set((myGroups ?? []).map(g => g.subjectId).filter(Boolean))) as number[];
-
-const termMap = new Map<number, { id:number; name:string|null }>();
-if (termIds.length) {
-  const { data: terms } = await supabase.from("Term").select("id, name").in("id", termIds);
-  (terms ?? []).forEach(t => termMap.set(t.id, t));
-}
-
-const subjMap = new Map<number, { id:number; name:string|null }>();
-if (subjIds.length) {
-  const { data: subjs } = await supabase.from("Subject").select("id, name").in("id", subjIds);
-  (subjs ?? []).forEach(s => subjMap.set(s.id, s));
-}
-
-const groups = (myGroups ?? []).map(g => ({
-  id: g.id,
-  code: g.code,
-  termName: g.termId ? termMap.get(g.termId)?.name ?? null : null,
-  subjectName: g.subjectId ? subjMap.get(g.subjectId)?.name ?? null : null,
-}));
-  
   // Construir clases enriquecidas
   const classes = (sessions as SessionRow[] | null ?? []).map((s) => {
     const group = s.group_id ? groupMap.get(s.group_id) ?? null : null;
@@ -183,7 +266,7 @@ const groups = (myGroups ?? []).map(g => ({
     };
   });
 
-  // Mis materias (distintas, derivadas de las clases)
+  // Materias (distintas) derivadas de las clases
   const subjects = Array.from(
     new Map(
       classes
@@ -192,13 +275,43 @@ const groups = (myGroups ?? []).map(g => ({
     ).values()
   );
 
+  // Mis Grupos (para pestaña "Mis grupos")
+  const { data: myGroups } = await supabase
+    .from("Group")
+    .select("id, code, subjectId, termId, teacher_user_id")
+    .eq("teacher_user_id", uid)
+    .order("code", { ascending: true });
+
+  const termIds = Array.from(new Set((myGroups ?? []).map((g: any) => g.termId).filter(Boolean))) as number[];
+  const subjIds = Array.from(new Set((myGroups ?? []).map((g: any) => g.subjectId).filter(Boolean))) as number[];
+
+  const termMap = new Map<number, { id: number; name: string | null }>();
+  if (termIds.length) {
+    const { data: terms } = await supabase.from("Term").select("id, name").in("id", termIds);
+    (terms as { id: number; name: string | null }[] | null ?? []).forEach((t) => termMap.set(t.id, t));
+  }
+
+  const subjMap = new Map<number, { id: number; name: string | null }>();
+  if (subjIds.length) {
+    const { data: subjs } = await supabase.from("Subject").select("id, name").in("id", subjIds);
+    (subjs as { id: number; name: string | null }[] | null ?? []).forEach((s) => subjMap.set(s.id, s));
+  }
+
+  const groups = (myGroups ?? []).map((g: any) => ({
+    id: g.id as number,
+    code: (g.code as string | null) ?? null,
+    termName: g.termId ? termMap.get(g.termId)?.name ?? null : null,
+    subjectName: g.subjectId ? subjMap.get(g.subjectId)?.name ?? null : null,
+  }));
+
   return (
     <ProfileTabs
       profile={{ email: me?.email ?? auth.user.email ?? "", role: me?.role ?? "docente" }}
       classes={classes}
       subjects={subjects}
-      teacher={teacher ?? null}
-      groups={groups} 
+      teacher={(teacher ?? null) as TeacherRow}
+      groups={groups}
     />
   );
 }
+
