@@ -1,5 +1,5 @@
 // app/staff/control-escolar/profesores/page.tsx
-import supabaseAdmin from "@/lib/supabase/adminClient";
+import { supabaseAdmin } from "@/lib/supabase/adminClient";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
