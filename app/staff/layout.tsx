@@ -21,7 +21,6 @@ export default async function StaffLayout({ children }: { children: React.ReactN
     .maybeSingle();
 
   if (!me?.role || !STAFF_ROLES.includes(me.role)) {
-    // No autorizado para zona staff
     redirect("/profile");
   }
 
@@ -40,12 +39,12 @@ export default async function StaffLayout({ children }: { children: React.ReactN
           <div className="mt-3 text-xs uppercase opacity-60 px-2">Áreas</div>
           <Link href="/staff/admissions" className="block px-2 py-1 rounded hover:bg-gray-50">Admisiones (CRM)</Link>
 
-          <details className="px-2 py-1 rounded">
+          <details className="px-2 py-1 rounded" open>
             <summary className="cursor-pointer select-none">Control escolar</summary>
             <div className="mt-1 ml-3 space-y-1">
-              <Link href="/staff/control-escolar" className="block px-2 py-1 rounded hover:bg-gray-50">Resumen</Link>
-              <Link href="/staff/control-escolar/asistencia" className="block px-2 py-1 rounded hover:bg-gray-50">Asistencia</Link>
-              <Link href="/staff/control-escolar/calificaciones" className="block px-2 py-1 rounded hover:bg-gray-50">Calificaciones</Link>
+              <Link href="/staff/control-escolar/alumnos" className="block px-2 py-1 rounded hover:bg-gray-50">Alumnos</Link>
+              <Link href="/staff/control-escolar/profesores" className="block px-2 py-1 rounded hover:bg-gray-50">Profesores</Link>
+              <Link href="/staff/control-escolar/tramites" className="block px-2 py-1 rounded hover:bg-gray-50">Trámites</Link>
             </div>
           </details>
 
