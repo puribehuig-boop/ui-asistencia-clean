@@ -1,0 +1,211 @@
+// app/staff/control-escolar/alumnos/[userId]/page.tsx
+import supabaseAdmin from "@/lib/supabase/adminClient";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+function hhmm(t?: string | null) {
+  if (!t) return "—";
+  if (/^\d{4}$/.test(t)) return `${t.slice(0,2)}:${t.slice(2,4)}`;
+  if (/^\d{2}:\d{2}/.test(t)) return t.slice(0,5);
+  return t;
+}
+
+export default async function StudentDetailPage({ params }: { params: { userId: string } }) {
+  const userId = params.userId;
+
+  // Perfil y nombre
+  const [{ data: prof }, { data: sp }] = await Promise.all([
+    supabaseAdmin.from("profiles").select("email, role").eq("user_id", userId).maybeSingle(),
+    supabaseAdmin.from("StudentProfile").select('userId, fullName, "first_name","last_name"').eq("userId", userId).maybeSingle(),
+  ]);
+
+  const name =
+    sp?.fullName ||
+    [sp?.first_name, sp?.last_name].filter(Boolean).join(" ") ||
+    prof?.email ||
+    "—";
+
+  // Grupos del alumno + calificaciones finales (usa v_group_roster que ya resuelve ids mixtos)
+  const { data: roster } = await supabaseAdmin
+    .from("v_group_roster")
+    .select("group_id, student_id_text, final_grade")
+    .eq("student_id_text", userId);
+
+  const groupIds = Array.from(new Set((roster ?? []).map(r => r.group_id)));
+  let groups: any[] = [];
+  let subjectMap = new Map<number, string>();
+  let termMap = new Map<number, string>();
+
+  if (groupIds.length) {
+    const { data: gRows } = await supabaseAdmin
+      .from("Group")
+      .select("id, code, subjectId, termId")
+      .in("id", groupIds);
+    groups = gRows ?? [];
+
+    const subjIds = Array.from(new Set(groups.map(g => g.subjectId).filter(Boolean)));
+    const termIds = Array.from(new Set(groups.map(g => g.termId).filter(Boolean)));
+
+    if (subjIds.length) {
+      const { data: subs } = await supabaseAdmin.from("Subject").select("id, name").in("id", subjIds);
+      (subs ?? []).forEach((s: any) => subjectMap.set(s.id, s.name ?? ""));
+    }
+    if (termIds.length) {
+      const { data: terms } = await supabaseAdmin.from("Term").select("id, name").in("id", termIds);
+      (terms ?? []).forEach((t: any) => termMap.set(t.id, t.name ?? ""));
+    }
+  }
+
+  // Sesiones de esos grupos (horario)
+  let sessions: any[] = [];
+  if (groupIds.length) {
+    const { data: sRows } = await supabaseAdmin
+      .from("sessions")
+      .select("id, session_date, start_planned, room_code, status, is_manual, started_at, ended_at, group_id, subjectId")
+      .in("group_id", groupIds)
+      .order("session_date", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(100);
+    sessions = sRows ?? [];
+  }
+
+  // Asistencia del alumno (por session_id)
+  const { data: attRows } = await supabaseAdmin
+    .from("attendance")
+    .select("session_id, status, updated_at")
+    .eq("student_id", userId);
+
+  const attBySession = new Map<number, { status: string; updated_at: string | null }>();
+  (attRows ?? []).forEach((a: any) => attBySession.set(a.session_id, { status: a.status, updated_at: a.updated_at ?? null }));
+
+  // Helpers pintables
+  const groupsView = groups.map(g => ({
+    id: g.id,
+    code: g.code ?? null,
+    subjectName: g.subjectId ? (subjectMap.get(g.subjectId) ?? null) : null,
+    termName: g.termId ? (termMap.get(g.termId) ?? null) : null,
+    finalGrade: (roster ?? []).find(r => r.group_id === g.id)?.final_grade ?? null,
+  }));
+
+  const sessionsView = sessions.map(s => ({
+    id: s.id,
+    date: s.session_date ?? null,
+    time: hhmm(s.start_planned ?? null),
+    room: s.room_code ?? null,
+    status: s.status ?? null,
+    subjectName: s.subjectId ? (subjectMap.get(s.subjectId) ?? null) : null,
+    myStatus: attBySession.get(s.id)?.status ?? "—",
+  }));
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-lg font-semibold">Alumno: {name}</h1>
+        <div className="text-sm opacity-70">{prof?.email ?? "—"} · Rol: {prof?.role ?? "—"}</div>
+      </div>
+
+      {/* Nav local simple */}
+      <div className="flex flex-wrap gap-2 border-b pb-2 text-sm">
+        <a href="#info" className="px-2 py-1 rounded border">Información y documentos</a>
+        <a href="#historial" className="px-2 py-1 rounded border">Historial</a>
+        <a href="#boletas" className="px-2 py-1 rounded border">Boletas</a>
+        <a href="#horarios" className="px-2 py-1 rounded border">Horarios</a>
+        <a href="#asistencia" className="px-2 py-1 rounded border">Asistencia</a>
+      </div>
+
+      {/* Información y documentos */}
+      <section id="info" className="space-y-3">
+        <h2 className="font-medium">Información y documentos</h2>
+        <div className="border rounded p-3">
+          <div className="text-sm">Nombre: <b>{name}</b></div>
+          <div className="text-sm">Correo: <b>{prof?.email ?? "—"}</b></div>
+          <div className="text-xs opacity-60 mt-2">
+            Documentos: <i>(placeholder)</i>. Aquí podrás listar comprobantes, constancias, etc.
+          </div>
+        </div>
+      </section>
+
+      {/* Historial (placeholder) */}
+      <section id="historial" className="space-y-3">
+        <h2 className="font-medium">Historial</h2>
+        <div className="border rounded p-3 text-sm opacity-70">
+          Próximamente: cambios de grupo, inscripciones/bajas, trámites concluidos.
+        </div>
+      </section>
+
+      {/* Boletas (usa final_grade por grupo) */}
+      <section id="boletas" className="space-y-3">
+        <h2 className="font-medium">Boletas</h2>
+        <div className="border rounded">
+          <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
+            <div className="col-span-5 text-black">Materia / Grupo</div>
+            <div className="col-span-4 text-black">Periodo</div>
+            <div className="col-span-3 text-black">Calificación final</div>
+          </div>
+          <div>
+            {groupsView.map(g => (
+              <div key={g.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm">
+                <div className="col-span-5">
+                  <b>{g.subjectName ?? "—"}</b>
+                  <span className="opacity-70"> · {g.code ?? `Grupo #${g.id}`}</span>
+                </div>
+                <div className="col-span-4">{g.termName ?? "—"}</div>
+                <div className="col-span-3">{g.finalGrade ?? "—"}</div>
+              </div>
+            ))}
+            {!groupsView.length && <div className="p-4 text-sm opacity-70">Sin grupos asignados.</div>}
+          </div>
+        </div>
+      </section>
+
+      {/* Horarios (sesiones) */}
+      <section id="horarios" className="space-y-3">
+        <h2 className="font-medium">Horarios</h2>
+        <div className="border rounded">
+          <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
+            <div className="col-span-3 text-black">Fecha</div>
+            <div className="col-span-2 text-black">Hora</div>
+            <div className="col-span-3 text-black">Materia</div>
+            <div className="col-span-2 text-black">Salón</div>
+            <div className="col-span-2 text-black">Estado</div>
+          </div>
+          <div>
+            {sessionsView.map(s => (
+              <div key={s.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm">
+                <div className="col-span-3">{s.date ?? "—"}</div>
+                <div className="col-span-2">{s.time ?? "—"}</div>
+                <div className="col-span-3">{s.subjectName ?? "—"}</div>
+                <div className="col-span-2">{s.room ?? "—"}</div>
+                <div className="col-span-2">{s.status ?? "—"}</div>
+              </div>
+            ))}
+            {!sessionsView.length && <div className="p-4 text-sm opacity-70">Sin sesiones.</div>}
+          </div>
+        </div>
+      </section>
+
+      {/* Asistencia por sesión */}
+      <section id="asistencia" className="space-y-3">
+        <h2 className="font-medium">Asistencia</h2>
+        <div className="border rounded">
+          <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
+            <div className="col-span-4 text-black">Fecha / Materia</div>
+            <div className="col-span-4 text-black">Salón / Sesión</div>
+            <div className="col-span-4 text-black">Mi estado</div>
+          </div>
+          <div>
+            {sessionsView.map(s => (
+              <div key={s.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm">
+                <div className="col-span-4">{s.date ?? "—"} · {s.subjectName ?? "—"}</div>
+                <div className="col-span-4">{s.room ?? "—"} · #{s.id}</div>
+                <div className="col-span-4"><b>{s.myStatus}</b></div>
+              </div>
+            ))}
+            {!sessionsView.length && <div className="p-4 text-sm opacity-70">Sin registros.</div>}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
