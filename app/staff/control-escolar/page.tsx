@@ -21,6 +21,9 @@ export default async function ControlEscolarHome() {
           <div className="font-medium mb-1">Trámites</div>
           <div className="text-xs opacity-60">Futuras implementaciones.</div>
         </a>
+        <Link href="/staff/control-escolar/justificaciones" className="block px-2 py-1 rounded hover:bg-gray-50">
+  Justificaciones
+</Link>
       </div>
     </div>
   );
