@@ -1,6 +1,9 @@
 // app/justifications/new/page.tsx
 "use client";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 import { useSearchParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browserClient";
@@ -9,14 +12,14 @@ export default function NewJustificationPage() {
   const sp = useSearchParams();
   const router = useRouter();
   const sessionId = Number(sp.get("sessionId") || 0);
+
   const [reason, setReason] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
-  const supabase = createSupabaseBrowserClient();
 
   useEffect(() => {
     if (!sessionId) {
-      alert("Falta sessionId");
+      // si no hay sessionId, regresamos al perfil (asistencia)
       router.replace("/profile?tab=asistencia");
     }
   }, [sessionId, router]);
@@ -31,17 +34,23 @@ export default function NewJustificationPage() {
     try {
       let evidencePath: string | null = null;
 
-      // Subir evidencia (opcional)
+      // Subir evidencia (opcional) usando el **browser client** solo aquí
       if (file) {
+        const supabase = createSupabaseBrowserClient();
         const { data: userRes } = await supabase.auth.getUser();
         const uid = userRes?.user?.id;
-        if (!uid) throw new Error("No auth");
+        if (!uid) throw new Error("No autenticado");
+
         const key = `${uid}/${sessionId}/${Date.now()}_${file.name}`;
-        const up = await supabase.storage.from("justifications").upload(key, file, { upsert: true });
+        const up = await supabase.storage
+          .from("justifications")
+          .upload(key, file, { upsert: true });
         if (up.error) throw up.error;
+
         evidencePath = key;
       }
 
+      // Crear la justificación (API server-side)
       const res = await fetch("/api/justifications/new", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -63,7 +72,8 @@ export default function NewJustificationPage() {
     <div className="max-w-xl mx-auto p-6 space-y-4">
       <h1 className="text-lg font-semibold">Solicitar justificación</h1>
       <form onSubmit={onSubmit} className="space-y-3">
-        <div className="text-sm">Sesión: <b>#{sessionId}</b></div>
+        <div className="text-sm">Sesión: <b>#{sessionId || "—"}</b></div>
+
         <div>
           <label className="text-sm block mb-1">Motivo</label>
           <textarea
@@ -75,16 +85,26 @@ export default function NewJustificationPage() {
             required
           />
         </div>
+
         <div>
           <label className="text-sm block mb-1">Evidencia (opcional)</label>
-          <input type="file" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-          <div className="text-xs opacity-60 mt-1">Formatos comunes (PDF, JPG, PNG). Máx ~5MB recomendado.</div>
+          <input
+            type="file"
+            accept=".pdf,.png,.jpg,.jpeg,.heic,.webp"
+            onChange={(e) => setFile(e.target.files?.[0] || null)}
+          />
+          <div className="text-xs opacity-60 mt-1">
+            Formatos comunes (PDF, JPG, PNG). Máx ~5MB recomendado.
+          </div>
         </div>
+
         <div className="flex gap-2">
           <button disabled={loading} className="px-3 py-2 border rounded">
             {loading ? "Enviando..." : "Enviar"}
           </button>
-          <a className="px-3 py-2 border rounded" href="/profile?tab=asistencia">Cancelar</a>
+          <a className="px-3 py-2 border rounded" href="/profile?tab=asistencia">
+            Cancelar
+          </a>
         </div>
       </form>
     </div>
