@@ -13,12 +13,30 @@ function hhmm(t?: string | null) {
   return s;
 }
 
-export default async function ProfilePage() {
+function TabNav({ tab, tabs }: { tab: string; tabs: { key: string; label: string }[] }) {
+  return (
+    <div className="flex gap-2 border-b">
+      {tabs.map((t) => (
+        <a
+          key={t.key}
+          href={`/profile?tab=${t.key}`}
+          className={`px-3 py-2 text-sm ${tab === t.key ? "border-b-2 border-black font-medium" : "opacity-70"}`}
+        >
+          {t.label}
+        </a>
+      ))}
+    </div>
+  );
+}
+
+export default async function ProfilePage({ searchParams }: { searchParams?: { tab?: string } }) {
   const supabase = createSupabaseServerClient();
   const { data: auth } = await supabase.auth.getUser();
   if (!auth?.user) redirect("/login");
 
-  // Perfil base (correo + rol)
+  const tab = (searchParams?.tab ?? "").toLowerCase() || "resumen";
+
+  // Perfil base
   const { data: me } = await supabase
     .from("profiles")
     .select("email, role")
@@ -28,9 +46,9 @@ export default async function ProfilePage() {
   const email = me?.email ?? auth.user.email ?? "";
   const role = (me?.role ?? "").toLowerCase();
 
-  // --- ALUMNO ---
+  /** ========================= ALUMNO ========================= */
   if (role === "alumno" || role === "student") {
-    // 1) StudentProfile (para tomar id numérico y nombre)
+    // StudentProfile
     const { data: sp } = await supabase
       .from("StudentProfile")
       .select('id, "userId", "fullName", "first_name", "last_name"')
@@ -42,7 +60,7 @@ export default async function ProfilePage() {
       [sp?.first_name, sp?.last_name].filter(Boolean).join(" ") ||
       email;
 
-    // 2) Grupos del alumno (Enrollment usa id numérico)
+    // Enrollment → mis grupos
     let groupIds: number[] = [];
     if (sp?.id != null) {
       const { data: enr } = await supabase
@@ -52,49 +70,43 @@ export default async function ProfilePage() {
       groupIds = Array.from(new Set((enr ?? []).map((r: any) => Number(r.groupId)).filter(Boolean)));
     }
 
-    // 3) Datos de grupos, materias y periodos (para pintar)
-    let subjectMap = new Map<number, string>();
-    let termMap = new Map<number, string>();
-    if (groupIds.length) {
-      const { data: groups } = await supabase
-        .from("Group")
-        .select("id, code, subjectId, termId")
-        .in("id", groupIds);
+    // Catálogos de grupos/materias/periodos
+    const groups = groupIds.length
+      ? (await supabase.from("Group").select("id, code, subjectId, termId, teacher_user_id").in("id", groupIds)).data ?? []
+      : [];
 
-      const subjIds = Array.from(new Set((groups ?? []).map((g: any) => g.subjectId).filter(Boolean)));
-      const termIds = Array.from(new Set((groups ?? []).map((g: any) => g.termId).filter(Boolean)));
+    const subjIds = Array.from(new Set(groups.map((g: any) => g.subjectId).filter(Boolean)));
+    const termIds = Array.from(new Set(groups.map((g: any) => g.termId).filter(Boolean)));
 
-      if (subjIds.length) {
-        const { data: subs } = await supabase.from("Subject").select("id, name").in("id", subjIds);
-        (subs ?? []).forEach((s: any) => subjectMap.set(s.id, s.name ?? ""));
-      }
-      if (termIds.length) {
-        const { data: terms } = await supabase.from("Term").select("id, name").in("id", termIds);
-        (terms ?? []).forEach((t: any) => termMap.set(t.id, t.name ?? ""));
-      }
-    }
+    const subjects = subjIds.length
+      ? (await supabase.from("Subject").select("id, name").in("id", subjIds)).data ?? []
+      : [];
+    const terms = termIds.length
+      ? (await supabase.from("Term").select("id, name").in("id", termIds)).data ?? []
+      : [];
 
-    // 4) Sesiones de esos grupos (Mi horario / Mis clases)
-    let sessions: any[] = [];
-    if (groupIds.length) {
-      const { data: sRows } = await supabase
-        .from("sessions")
-        .select("id, session_date, start_planned, room_code, status, group_id, subjectId")
-        .in("group_id", groupIds)
-        .order("session_date", { ascending: false })
-        .order("id", { ascending: false })
-        .limit(200);
-      sessions = sRows ?? [];
-    }
+    const subjectMap = new Map<number, string>();
+    subjects.forEach((s: any) => subjectMap.set(s.id, s.name ?? ""));
+    const termMap = new Map<number, string>();
+    terms.forEach((t: any) => termMap.set(t.id, t.name ?? ""));
 
-    // 5) Asistencia del alumno — FIX: leer por **dos llaves**
-    //    a) uuid moderno (student_user_id)
+    // Mis clases (sesiones) derivadas de mis grupos
+    const sessions = groupIds.length
+      ? (await supabase
+          .from("sessions")
+          .select("id, session_date, start_planned, room_code, status, group_id, subjectId")
+          .in("group_id", groupIds)
+          .order("session_date", { ascending: false })
+          .order("id", { ascending: false })
+          .limit(200)).data ?? []
+      : [];
+
+    // === FIX asistencia: leer por dos llaves (uuid moderno y legacy) ===
     const attUuid = await supabase
       .from("attendance")
       .select("session_id, status, updated_at")
       .eq("student_user_id", auth.user.id);
 
-    //    b) id histórico en texto (student_id) -> usar UUID y, si existe, el id numérico del StudentProfile
     const candidateIds: string[] = [auth.user.id];
     if (sp?.id != null) candidateIds.push(String(sp.id));
 
@@ -105,12 +117,7 @@ export default async function ProfilePage() {
           .in("student_id", candidateIds)
       : { data: [] as any[], error: null };
 
-    // 6) Unimos y deduplicamos por session_id (prioridad a filas por UUID)
-    const attRows = [
-      ...(attUuid.data ?? []),
-      ...(attLegacy.data ?? []),
-    ];
-
+    const attRows = [...(attUuid.data ?? []), ...(attLegacy.data ?? [])];
     const attBySession = new Map<number, { status: string; updated_at: string | null }>();
     for (const r of attRows) {
       if (!attBySession.has(r.session_id)) {
@@ -118,8 +125,12 @@ export default async function ProfilePage() {
       }
     }
 
-    // 7) Vista "Mis clases" (resumen) y "Mi asistencia"
-    const classes = sessions.map((s: any) => ({
+    // Derivados para tabs
+    const mySubjects = Array.from(
+      new Map(groups.map((g: any) => [g.subjectId, { id: g.subjectId, name: subjectMap.get(g.subjectId) ?? "—" }])).values()
+    );
+
+    const myClasses = sessions.map((s: any) => ({
       id: s.id as number,
       date: s.session_date ?? null,
       time: hhmm(s.start_planned ?? null),
@@ -130,10 +141,17 @@ export default async function ProfilePage() {
       myStatus: attBySession.get(s.id)?.status ?? "—",
     }));
 
+    const tabs = [
+      { key: "resumen", label: "Resumen" },
+      { key: "materias", label: "Mis materias" },
+      { key: "clases", label: "Mis clases" },
+      { key: "grupos", label: "Mis grupos" },
+    ];
+
     return (
       <div className="max-w-6xl mx-auto p-6 space-y-6">
         {/* Header */}
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start justify-between">
           <div>
             <h1 className="text-2xl font-semibold">Mi perfil (Alumno)</h1>
             <div className="text-sm opacity-70">{email} · Rol: {role}</div>
@@ -141,73 +159,130 @@ export default async function ProfilePage() {
           <a href="/logout" className="px-3 py-2 border rounded text-sm">Cerrar sesión</a>
         </div>
 
-        {/* Info básica */}
-        <section className="space-y-2">
-          <h2 className="text-lg font-medium">Perfil</h2>
-          <div className="border rounded p-3 text-sm">
-            <div><b>Nombre:</b> {studentName || "—"}</div>
-            <div><b>Correo:</b> {email}</div>
-          </div>
-        </section>
+        <TabNav tab={tab} tabs={tabs} />
 
-        {/* Mi asistencia */}
-        <section className="space-y-2" id="asistencia">
-          <div className="flex items-center justify-between">
+        {/* CONTENIDOS */}
+        {tab === "resumen" && (
+          <section className="space-y-3">
             <h2 className="text-lg font-medium">Mi asistencia</h2>
-            <div className="text-xs opacity-60">
-              Para justificar, usa el enlace en la sesión correspondiente.
-            </div>
-          </div>
-
-          <div className="border rounded">
-            <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
-              <div className="col-span-3 text-black">Fecha</div>
-              <div className="col-span-2 text-black">Hora</div>
-              <div className="col-span-3 text-black">Materia</div>
-              <div className="col-span-2 text-black">Salón</div>
-              <div className="col-span-2 text-black">Mi estado</div>
-            </div>
-
-            <div>
-              {classes.map((c) => (
-                <div key={c.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm items-center">
-                  <div className="col-span-3">{c.date ?? "—"}</div>
-                  <div className="col-span-2">{c.time ?? "—"}</div>
-                  <div className="col-span-3">{c.subjectName ?? "—"}</div>
-                  <div className="col-span-2">{c.room ?? "—"}</div>
-                  <div className="col-span-2 flex items-center gap-2">
-                    <span className="px-2 py-0.5 rounded text-white text-xs"
-                      style={{
-                        background:
-                          c.myStatus === "Presente" ? "#16a34a" :
-                          c.myStatus === "Tarde" ? "#f59e0b" :
-                          c.myStatus === "Justificado" ? "#2563eb" :
-                          c.myStatus === "Ausente" ? "#dc2626" : "#6b7280"
-                      }}
-                    >
-                      {c.myStatus}
-                    </span>
-                    {c.myStatus !== "Justificado" && (
-                      <a className="text-xs underline" href={`/justifications/new?sessionId=${c.id}`}>
-                        Justificar
-                      </a>
-                    )}
+            <div className="border rounded">
+              <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
+                <div className="col-span-3 text-black">Fecha</div>
+                <div className="col-span-2 text-black">Hora</div>
+                <div className="col-span-3 text-black">Materia</div>
+                <div className="col-span-2 text-black">Salón</div>
+                <div className="col-span-2 text-black">Mi estado</div>
+              </div>
+              <div>
+                {myClasses.map((c) => (
+                  <div key={c.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm items-center">
+                    <div className="col-span-3">{c.date ?? "—"}</div>
+                    <div className="col-span-2">{c.time ?? "—"}</div>
+                    <div className="col-span-3">{c.subjectName ?? "—"}</div>
+                    <div className="col-span-2">{c.room ?? "—"}</div>
+                    <div className="col-span-2 flex items-center gap-2">
+                      <span className="px-2 py-0.5 rounded text-white text-xs"
+                        style={{
+                          background:
+                            c.myStatus === "Presente" ? "#16a34a" :
+                            c.myStatus === "Tarde" ? "#f59e0b" :
+                            c.myStatus === "Justificado" ? "#2563eb" :
+                            c.myStatus === "Ausente" ? "#dc2626" : "#6b7280"
+                        }}
+                      >
+                        {c.myStatus}
+                      </span>
+                      {c.myStatus !== "Justificado" && (
+                        <a className="text-xs underline" href={`/justifications/new?sessionId=${c.id}`}>Justificar</a>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
-              {!classes.length && (
-                <div className="p-4 text-sm opacity-70">Sin sesiones o sin asistencia registrada.</div>
-              )}
+                ))}
+                {!myClasses.length && <div className="p-4 text-sm opacity-70">Sin sesiones o sin asistencia registrada.</div>}
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
+        )}
+
+        {tab === "materias" && (
+          <section className="space-y-2">
+            <h2 className="text-lg font-medium">Mis materias</h2>
+            <div className="border rounded">
+              <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
+                <div className="col-span-8 text-black">Materia</div>
+                <div className="col-span-4 text-black">Acciones</div>
+              </div>
+              <div>
+                {mySubjects.map((s: any) => (
+                  <div key={s.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm items-center">
+                    <div className="col-span-8">{s.name ?? "—"}</div>
+                    <div className="col-span-4">
+                      {/* placeholder para acciones futuras */}
+                      <span className="text-xs opacity-60">—</span>
+                    </div>
+                  </div>
+                ))}
+                {!mySubjects.length && <div className="p-4 text-sm opacity-70">Sin materias.</div>}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {tab === "clases" && (
+          <section className="space-y-2">
+            <h2 className="text-lg font-medium">Mis clases</h2>
+            <div className="border rounded">
+              <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
+                <div className="col-span-3 text-black">Fecha</div>
+                <div className="col-span-2 text-black">Hora</div>
+                <div className="col-span-3 text-black">Materia</div>
+                <div className="col-span-2 text-black">Salón</div>
+                <div className="col-span-2 text-black">Mi estado</div>
+              </div>
+              <div>
+                {myClasses.map((c) => (
+                  <div key={c.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm items-center">
+                    <div className="col-span-3">{c.date ?? "—"}</div>
+                    <div className="col-span-2">{c.time ?? "—"}</div>
+                    <div className="col-span-3">{c.subjectName ?? "—"}</div>
+                    <div className="col-span-2">{c.room ?? "—"}</div>
+                    <div className="col-span-2">{c.myStatus}</div>
+                  </div>
+                ))}
+                {!myClasses.length && <div className="p-4 text-sm opacity-70">Sin clases.</div>}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {tab === "grupos" && (
+          <section className="space-y-2">
+            <h2 className="text-lg font-medium">Mis grupos</h2>
+            <div className="border rounded">
+              <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
+                <div className="col-span-4 text-black">Grupo</div>
+                <div className="col-span-4 text-black">Materia</div>
+                <div className="col-span-4 text-black">Periodo</div>
+              </div>
+              <div>
+                {groups.map((g: any) => (
+                  <div key={g.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm items-center">
+                    <div className="col-span-4">{g.code ?? `#${g.id}`}</div>
+                    <div className="col-span-4">{g.subjectId ? (subjectMap.get(g.subjectId) ?? "—") : "—"}</div>
+                    <div className="col-span-4">{g.termId ? (termMap.get(g.termId) ?? "—") : "—"}</div>
+                  </div>
+                ))}
+                {!groups.length && <div className="p-4 text-sm opacity-70">Sin grupos.</div>}
+              </div>
+            </div>
+          </section>
+        )}
       </div>
     );
   }
 
-  // --- DOCENTE ---
+  /** ========================= DOCENTE ========================= */
   if (role === "docente") {
-    // Info de docente (opcional si tienes teacher_profile)
     const { data: tp } = await supabase
       .from("teacher_profile")
       .select("first_name, last_name, status")
@@ -216,10 +291,9 @@ export default async function ProfilePage() {
 
     const teacherName = [tp?.first_name, tp?.last_name].filter(Boolean).join(" ") || email;
 
-    // Sesiones del docente
     const { data: sessions } = await supabase
       .from("sessions")
-      .select("id, session_date, start_planned, room_code, status, subjectId")
+      .select("id, session_date, start_planned, room_code, status, subjectId, group_id")
       .eq("teacher_user_id", auth.user.id)
       .order("session_date", { ascending: false })
       .order("id", { ascending: false })
@@ -232,6 +306,19 @@ export default async function ProfilePage() {
       (subs ?? []).forEach((s: any) => subjMap.set(s.id, s.name ?? ""));
     }
 
+    // Mis grupos (vía Group.teacher_user_id)
+    const { data: tGroups } = await supabase
+      .from("Group")
+      .select("id, code, subjectId, termId")
+      .eq("teacher_user_id", auth.user.id);
+
+    const termIds = Array.from(new Set((tGroups ?? []).map((g: any) => g.termId).filter(Boolean)));
+    const termMap = new Map<number, string>();
+    if (termIds.length) {
+      const { data: terms } = await supabase.from("Term").select("id, name").in("id", termIds);
+      (terms ?? []).forEach((t: any) => termMap.set(t.id, t.name ?? ""));
+    }
+
     const mySessions = (sessions ?? []).map((s: any) => ({
       id: s.id as number,
       date: s.session_date ?? null,
@@ -241,10 +328,19 @@ export default async function ProfilePage() {
       subjectName: s.subjectId ? (subjMap.get(s.subjectId) ?? null) : null,
     }));
 
+    const mySubjects = Array.from(
+      new Map((tGroups ?? []).map((g: any) => [g.subjectId, { id: g.subjectId, name: subjMap.get(g.subjectId) ?? "—" }])).values()
+    );
+    const tabs = [
+      { key: "perfil", label: "Perfil" },
+      { key: "clases", label: "Mis clases" },
+      { key: "materias", label: "Mis materias" },
+      { key: "grupos", label: "Mis grupos" },
+    ];
+
     return (
       <div className="max-w-6xl mx-auto p-6 space-y-6">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start justify-between">
           <div>
             <h1 className="text-2xl font-semibold">Mi perfil (Docente)</h1>
             <div className="text-sm opacity-70">{email} · Rol: {role}</div>
@@ -252,53 +348,101 @@ export default async function ProfilePage() {
           <a href="/logout" className="px-3 py-2 border rounded text-sm">Cerrar sesión</a>
         </div>
 
-        {/* Perfil */}
-        <section className="space-y-2">
-          <h2 className="text-lg font-medium">Perfil</h2>
-          <div className="border rounded p-3 text-sm">
-            <div><b>Nombre:</b> {teacherName || "—"}</div>
-            <div><b>Estatus:</b> {tp?.status ?? "—"}</div>
-            <div><b>Correo:</b> {email}</div>
-          </div>
-        </section>
+        <TabNav tab={tab} tabs={tabs} />
 
-        {/* Mis clases (sesiones) */}
-        <section className="space-y-2">
-          <h2 className="text-lg font-medium">Mis clases</h2>
-          <div className="border rounded">
-            <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
-              <div className="col-span-3 text-black">Fecha</div>
-              <div className="col-span-2 text-black">Hora</div>
-              <div className="col-span-3 text-black">Materia</div>
-              <div className="col-span-2 text-black">Salón</div>
-              <div className="col-span-2 text-black">Acciones</div>
+        {tab === "perfil" && (
+          <section className="space-y-2">
+            <h2 className="text-lg font-medium">Perfil</h2>
+            <div className="border rounded p-3 text-sm">
+              <div><b>Nombre:</b> {teacherName || "—"}</div>
+              <div><b>Estatus:</b> {tp?.status ?? "—"}</div>
+              <div><b>Correo:</b> {email}</div>
             </div>
-            <div>
-              {mySessions.map((s) => (
-                <div key={s.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm items-center">
-                  <div className="col-span-3">{s.date ?? "—"}</div>
-                  <div className="col-span-2">{s.time ?? "—"}</div>
-                  <div className="col-span-3">{s.subjectName ?? "—"}</div>
-                  <div className="col-span-2">{s.room ?? "—"}</div>
-                  <div className="col-span-2">
-                    <a className="px-2 py-1 border rounded text-xs" href={`/teacher/sessions/${s.id}`}>Abrir</a>
+          </section>
+        )}
+
+        {tab === "clases" && (
+          <section className="space-y-2">
+            <h2 className="text-lg font-medium">Mis clases</h2>
+            <div className="border rounded">
+              <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
+                <div className="col-span-3 text-black">Fecha</div>
+                <div className="col-span-2 text-black">Hora</div>
+                <div className="col-span-3 text-black">Materia</div>
+                <div className="col-span-2 text-black">Salón</div>
+                <div className="col-span-2 text-black">Acciones</div>
+              </div>
+              <div>
+                {mySessions.map((s) => (
+                  <div key={s.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm items-center">
+                    <div className="col-span-3">{s.date ?? "—"}</div>
+                    <div className="col-span-2">{s.time ?? "—"}</div>
+                    <div className="col-span-3">{s.subjectName ?? "—"}</div>
+                    <div className="col-span-2">{s.room ?? "—"}</div>
+                    <div className="col-span-2">
+                      <a className="px-2 py-1 border rounded text-xs" href={`/teacher/sessions/${s.id}`}>Abrir</a>
+                    </div>
                   </div>
-                </div>
-              ))}
-              {!mySessions.length && (
-                <div className="p-4 text-sm opacity-70">Sin sesiones.</div>
-              )}
+                ))}
+                {!mySessions.length && <div className="p-4 text-sm opacity-70">Sin sesiones.</div>}
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
+        )}
+
+        {tab === "materias" && (
+          <section className="space-y-2">
+            <h2 className="text-lg font-medium">Mis materias</h2>
+            <div className="border rounded">
+              <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
+                <div className="col-span-8 text-black">Materia</div>
+                <div className="col-span-4 text-black">Acciones</div>
+              </div>
+              <div>
+                {mySubjects.map((s: any) => (
+                  <div key={s.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm items-center">
+                    <div className="col-span-8">{s.name ?? "—"}</div>
+                    <div className="col-span-4"><span className="text-xs opacity-60">—</span></div>
+                  </div>
+                ))}
+                {!mySubjects.length && <div className="p-4 text-sm opacity-70">Sin materias.</div>}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {tab === "grupos" && (
+          <section className="space-y-2">
+            <h2 className="text-lg font-medium">Mis grupos</h2>
+            <div className="border rounded">
+              <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
+                <div className="col-span-4 text-black">Grupo</div>
+                <div className="col-span-4 text-black">Materia</div>
+                <div className="col-span-4 text-black">Periodo</div>
+              </div>
+              <div>
+                {(await supabase
+                  .from("Group")
+                  .select("id, code, subjectId, termId")
+                  .eq("teacher_user_id", auth.user.id)).data?.map((g: any) => (
+                  <div key={g.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm items-center">
+                    <div className="col-span-4">{g.code ?? `#${g.id}`}</div>
+                    <div className="col-span-4">{g.subjectId ? (subjMap.get(g.subjectId) ?? "—") : "—"}</div>
+                    <div className="col-span-4">{g.termId ? (termMap.get(g.termId) ?? "—") : "—"}</div>
+                  </div>
+                )) ?? <div className="p-4 text-sm opacity-70">Sin grupos.</div>}
+              </div>
+            </div>
+          </section>
+        )}
       </div>
     );
   }
 
-  // --- Otros roles (admin/staff) -> vista mínima + sugerencia de ir a /staff
+  /** ========================= OTROS ROLES ========================= */
   return (
     <div className="max-w-4xl mx-auto p-6 space-y-6">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Mi perfil</h1>
           <div className="text-sm opacity-70">{email} · Rol: {role || "—"}</div>
@@ -307,7 +451,7 @@ export default async function ProfilePage() {
       </div>
 
       <div className="border rounded p-4 text-sm">
-        <p>Tu rol es <b>{role || "—"}</b>. Si eres parte del staff, entra a <a className="underline" href="/staff">/staff</a> para administrar.</p>
+        <p>Tu rol es <b>{role || "—"}</b>. Si eres parte del staff, entra a <a className="underline" href="/staff">/staff</a>.</p>
       </div>
     </div>
   );
