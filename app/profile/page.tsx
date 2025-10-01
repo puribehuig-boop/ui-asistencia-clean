@@ -1,317 +1,314 @@
 // app/profile/page.tsx
 import { createSupabaseServerClient } from "@/lib/supabase/serverClient";
 import { redirect } from "next/navigation";
-import ProfileTabs from "./ProfileTabs";   // pestañas del DOCENTE
-import StudentTabs from "./StudentTabs";   // pestañas del ALUMNO
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-// ===== Tipos simples (no exhaustivos) para las filas que usamos =====
-type SessionRow = {
-  id: number;
-  session_date: string | null;
-  start_planned: string | null;
-  room_code: string | null;
-  status: string | null;
-  is_manual: boolean | null;
-  started_at: string | null;
-  ended_at: string | null;
-  group_id: number | null;
-  subjectId: number | null;
-};
-
-type GroupRow = {
-  id: number;
-  code: string | null;
-  subjectId: number | null;
-  termId: number | null;
-  teacher_user_id?: string | null;
-};
-
-type SubjectRow = { id: number; name: string | null };
-
-type TeacherRow = {
-  first_name: string | null;
-  last_name: string | null;
-  edad: number | null;
-  curp: string | null;
-  rfc: string | null;
-  direccion: string | null;
-  plantel: string | null;
-  licenciatura: string | null;
-  cedula_lic: string | null;
-  maestria: string | null;
-  cedula_maest: string | null;
-  doctorado: string | null;
-  cedula_doct: string | null;
-  estado_civil: string | null;
-  nacionalidad: string | null;
-} | null;
-
-// ===== Helpers =====
-function hhmmFrom(startPlanned: string | null): string | null {
-  if (!startPlanned) return null;
-  if (/^\d{4}$/.test(startPlanned)) return `${startPlanned.slice(0, 2)}:${startPlanned.slice(2, 4)}`;
-  if (/^\d{2}:\d{2}/.test(startPlanned)) return startPlanned.slice(0, 5);
-  return null;
-}
-
-function withinPlannedWindow(
-  sessionDate: string | null,
-  hhmm: string | null,
-  isManual: boolean | null,
-  endedAt: string | null
-): boolean {
-  // Si ya terminó, siempre fuera de ventana (incluye manuales)
-  if (endedAt) return false;
-  if (isManual) return true;
-  if (!sessionDate || !hhmm) return false;
-  const planned = new Date(`${sessionDate}T${hhmm}:00`);
-  if (isNaN(planned.getTime())) return false;
-  const now = new Date();
-  const from = new Date(planned.getTime() - 30 * 60 * 1000);
-  const to = new Date(planned.getTime() + 30 * 60 * 1000);
-  return now >= from && now <= to;
+function hhmm(t?: string | null) {
+  if (!t) return "—";
+  const s = String(t);
+  if (/^\d{4}$/.test(s)) return `${s.slice(0, 2)}:${s.slice(2, 4)}`;
+  if (/^\d{2}:\d{2}/.test(s)) return s.slice(0, 5);
+  return s;
 }
 
 export default async function ProfilePage() {
   const supabase = createSupabaseServerClient();
   const { data: auth } = await supabase.auth.getUser();
   if (!auth?.user) redirect("/login");
-  const uid = auth.user.id;
 
-  // Perfil básico para rol/email
+  // Perfil base (correo + rol)
   const { data: me } = await supabase
     .from("profiles")
     .select("email, role")
-    .eq("user_id", uid)
+    .eq("user_id", auth.user.id)
     .maybeSingle();
 
-  const role = (me?.role || "docente").toLowerCase();
+  const email = me?.email ?? auth.user.email ?? "";
+  const role = (me?.role ?? "").toLowerCase();
 
-  // ========================= ALUMNO =========================
-  if (role === "student" || role === "alumno") {
-    // Mis grupos (vista helper)
-    const { data: mg } = await supabase
-      .from("v_my_groups")
-      .select("group_id, group_code, subject_id, term_id, student_uuid_text")
-      .eq("student_uuid_text", uid);
+  // --- ALUMNO ---
+  if (role === "alumno" || role === "student") {
+    // 1) StudentProfile (para tomar id numérico y nombre)
+    const { data: sp } = await supabase
+      .from("StudentProfile")
+      .select('id, "userId", "fullName", "first_name", "last_name"')
+      .eq("userId", auth.user.id)
+      .maybeSingle();
 
-    const groupIds = Array.from(new Set((mg ?? []).map((g: any) => g.group_id))) as number[];
-    const subjIds = Array.from(
-      new Set((mg ?? []).map((g: any) => g.subject_id).filter((v: any) => v != null))
-    ) as number[];
-    const termIds = Array.from(
-      new Set((mg ?? []).map((g: any) => g.term_id).filter((v: any) => v != null))
-    ) as number[];
+    const studentName =
+      sp?.fullName ||
+      [sp?.first_name, sp?.last_name].filter(Boolean).join(" ") ||
+      email;
 
-    const subjMap = new Map<number, string>();
-    if (subjIds.length) {
-      const { data: subjs } = await supabase
-        .from("Subject")
-        .select("id, name")
-        .in("id", subjIds);
-      (subjs as SubjectRow[] | null ?? []).forEach((s) => subjMap.set(s.id, s.name ?? ""));
+    // 2) Grupos del alumno (Enrollment usa id numérico)
+    let groupIds: number[] = [];
+    if (sp?.id != null) {
+      const { data: enr } = await supabase
+        .from("Enrollment")
+        .select('"groupId"')
+        .eq("studentId", sp.id);
+      groupIds = Array.from(new Set((enr ?? []).map((r: any) => Number(r.groupId)).filter(Boolean)));
     }
 
-    const termMap = new Map<number, string>();
-    if (termIds.length) {
-      const { data: terms } = await supabase.from("Term").select("id, name").in("id", termIds);
-      (terms as { id: number; name: string | null }[] | null ?? []).forEach((t) =>
-        termMap.set(t.id, t.name ?? "")
-      );
+    // 3) Datos de grupos, materias y periodos (para pintar)
+    let subjectMap = new Map<number, string>();
+    let termMap = new Map<number, string>();
+    if (groupIds.length) {
+      const { data: groups } = await supabase
+        .from("Group")
+        .select("id, code, subjectId, termId")
+        .in("id", groupIds);
+
+      const subjIds = Array.from(new Set((groups ?? []).map((g: any) => g.subjectId).filter(Boolean)));
+      const termIds = Array.from(new Set((groups ?? []).map((g: any) => g.termId).filter(Boolean)));
+
+      if (subjIds.length) {
+        const { data: subs } = await supabase.from("Subject").select("id, name").in("id", subjIds);
+        (subs ?? []).forEach((s: any) => subjectMap.set(s.id, s.name ?? ""));
+      }
+      if (termIds.length) {
+        const { data: terms } = await supabase.from("Term").select("id, name").in("id", termIds);
+        (terms ?? []).forEach((t: any) => termMap.set(t.id, t.name ?? ""));
+      }
     }
 
-    const myGroups = (mg ?? []).map((g: any) => ({
-      id: g.group_id as number,
-      code: (g.group_code as string | null) ?? null,
-      subjectName: g.subject_id ? subjMap.get(g.subject_id) ?? null : null,
-      termName: g.term_id ? termMap.get(g.term_id) ?? null : null,
+    // 4) Sesiones de esos grupos (Mi horario / Mis clases)
+    let sessions: any[] = [];
+    if (groupIds.length) {
+      const { data: sRows } = await supabase
+        .from("sessions")
+        .select("id, session_date, start_planned, room_code, status, group_id, subjectId")
+        .in("group_id", groupIds)
+        .order("session_date", { ascending: false })
+        .order("id", { ascending: false })
+        .limit(200);
+      sessions = sRows ?? [];
+    }
+
+    // 5) Asistencia del alumno — FIX: leer por **dos llaves**
+    //    a) uuid moderno (student_user_id)
+    const attUuid = await supabase
+      .from("attendance")
+      .select("session_id, status, updated_at")
+      .eq("student_user_id", auth.user.id);
+
+    //    b) id histórico en texto (student_id) -> usar UUID y, si existe, el id numérico del StudentProfile
+    const candidateIds: string[] = [auth.user.id];
+    if (sp?.id != null) candidateIds.push(String(sp.id));
+
+    const attLegacy = candidateIds.length
+      ? await supabase
+          .from("attendance")
+          .select("session_id, status, updated_at")
+          .in("student_id", candidateIds)
+      : { data: [] as any[], error: null };
+
+    // 6) Unimos y deduplicamos por session_id (prioridad a filas por UUID)
+    const attRows = [
+      ...(attUuid.data ?? []),
+      ...(attLegacy.data ?? []),
+    ];
+
+    const attBySession = new Map<number, { status: string; updated_at: string | null }>();
+    for (const r of attRows) {
+      if (!attBySession.has(r.session_id)) {
+        attBySession.set(r.session_id, { status: r.status, updated_at: r.updated_at ?? null });
+      }
+    }
+
+    // 7) Vista "Mis clases" (resumen) y "Mi asistencia"
+    const classes = sessions.map((s: any) => ({
+      id: s.id as number,
+      date: s.session_date ?? null,
+      time: hhmm(s.start_planned ?? null),
+      room: s.room_code ?? null,
+      status: s.status ?? null,
+      groupId: s.group_id ?? null,
+      subjectName: s.subjectId ? (subjectMap.get(s.subjectId) ?? null) : null,
+      myStatus: attBySession.get(s.id)?.status ?? "—",
     }));
 
-    // Mis sesiones (vista helper) con mi estado
-    const { data: ms } = await supabase
-      .from("v_my_sessions")
-      .select(
-        "id, session_date, start_planned, room_code, status, is_manual, started_at, ended_at, group_id, subject_id, student_id_text, my_attendance_status"
-      )
-      .eq("student_id_text", uid)
-      .order("session_date", { ascending: false })
-      .order("id", { ascending: false })
-      .limit(100);
-
-    const classes = (ms ?? []).map((s: any) => {
-      const time = hhmmFrom(s.start_planned ?? null);
-      return {
-        id: s.id as number,
-        date: (s.session_date as string | null) ?? null,
-        time,
-        room: (s.room_code as string | null) ?? null,
-        status: (s.status as string | null) ?? null,
-        myStatus: (s.my_attendance_status as string | null) ?? "—",
-        groupId: (s.group_id as number | null) ?? null,
-        subjectName: s.subject_id ? subjMap.get(s.subject_id) ?? null : null,
-      };
-    });
-
-    // Mis calificaciones (desde roster filtrando mi user_id)
-    let myGrades: { groupId: number; subjectName: string | null; final: number | null }[] = [];
-    if (groupIds.length) {
-      const { data: roster } = await supabase
-        .from("v_group_roster")
-        .select("group_id, student_id_text, final_grade")
-        .in("group_id", groupIds)
-        .eq("student_id_text", uid);
-
-      const subjByGroup = new Map<number, string | null>();
-      (mg ?? []).forEach((g: any) => {
-        subjByGroup.set(
-          g.group_id,
-          g.subject_id ? subjMap.get(g.subject_id) ?? null : null
-        );
-      });
-
-      myGrades = (roster ?? []).map((r: any) => ({
-        groupId: r.group_id as number,
-        subjectName: subjByGroup.get(r.group_id) ?? null,
-        final: (r.final_grade as number | null) ?? null,
-      }));
-    }
-
     return (
-      <StudentTabs
-        profile={{ email: me?.email ?? auth.user.email ?? "", role: me?.role ?? "student" }}
-        groups={myGroups}
-        classes={classes}
-        grades={myGrades}
-      />
+      <div className="max-w-6xl mx-auto p-6 space-y-6">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold">Mi perfil (Alumno)</h1>
+            <div className="text-sm opacity-70">{email} · Rol: {role}</div>
+          </div>
+          <a href="/logout" className="px-3 py-2 border rounded text-sm">Cerrar sesión</a>
+        </div>
+
+        {/* Info básica */}
+        <section className="space-y-2">
+          <h2 className="text-lg font-medium">Perfil</h2>
+          <div className="border rounded p-3 text-sm">
+            <div><b>Nombre:</b> {studentName || "—"}</div>
+            <div><b>Correo:</b> {email}</div>
+          </div>
+        </section>
+
+        {/* Mi asistencia */}
+        <section className="space-y-2" id="asistencia">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-medium">Mi asistencia</h2>
+            <div className="text-xs opacity-60">
+              Para justificar, usa el enlace en la sesión correspondiente.
+            </div>
+          </div>
+
+          <div className="border rounded">
+            <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
+              <div className="col-span-3 text-black">Fecha</div>
+              <div className="col-span-2 text-black">Hora</div>
+              <div className="col-span-3 text-black">Materia</div>
+              <div className="col-span-2 text-black">Salón</div>
+              <div className="col-span-2 text-black">Mi estado</div>
+            </div>
+
+            <div>
+              {classes.map((c) => (
+                <div key={c.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm items-center">
+                  <div className="col-span-3">{c.date ?? "—"}</div>
+                  <div className="col-span-2">{c.time ?? "—"}</div>
+                  <div className="col-span-3">{c.subjectName ?? "—"}</div>
+                  <div className="col-span-2">{c.room ?? "—"}</div>
+                  <div className="col-span-2 flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded text-white text-xs"
+                      style={{
+                        background:
+                          c.myStatus === "Presente" ? "#16a34a" :
+                          c.myStatus === "Tarde" ? "#f59e0b" :
+                          c.myStatus === "Justificado" ? "#2563eb" :
+                          c.myStatus === "Ausente" ? "#dc2626" : "#6b7280"
+                      }}
+                    >
+                      {c.myStatus}
+                    </span>
+                    {c.myStatus !== "Justificado" && (
+                      <a className="text-xs underline" href={`/justifications/new?sessionId=${c.id}`}>
+                        Justificar
+                      </a>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {!classes.length && (
+                <div className="p-4 text-sm opacity-70">Sin sesiones o sin asistencia registrada.</div>
+              )}
+            </div>
+          </div>
+        </section>
+      </div>
     );
   }
 
-  // ========================= DOCENTE (y otros roles) =========================
-  // Ficha docente
-  const { data: teacher } = await supabase
-    .from("teacher_profile")
-    .select(`
-      first_name, last_name, edad, curp, rfc, direccion, plantel,
-      licenciatura, cedula_lic, maestria, cedula_maest,
-      doctorado, cedula_doct, estado_civil, nacionalidad
-    `)
-    .eq("user_id", uid)
-    .maybeSingle<TeacherRow>();
+  // --- DOCENTE ---
+  if (role === "docente") {
+    // Info de docente (opcional si tienes teacher_profile)
+    const { data: tp } = await supabase
+      .from("teacher_profile")
+      .select("first_name, last_name, status")
+      .eq("user_id", auth.user.id)
+      .maybeSingle();
 
-  // Todas las sesiones del docente (máx 100)
-  const { data: sessions } = await supabase
-    .from("sessions")
-    .select(
-      "id, session_date, start_planned, room_code, status, is_manual, started_at, ended_at, group_id, subjectId"
-    )
-    .eq("teacher_user_id", uid)
-    .order("session_date", { ascending: false })
-    .order("id", { ascending: false })
-    .limit(100);
+    const teacherName = [tp?.first_name, tp?.last_name].filter(Boolean).join(" ") || email;
 
-  // Mapas de grupo y materia (usando subjectId de sesión o del grupo)
-  const groupIds = Array.from(
-    new Set((sessions ?? []).map((s: SessionRow) => s.group_id).filter((v): v is number => v != null))
-  );
-  const sessionSubjectIds = Array.from(
-    new Set((sessions ?? []).map((s: SessionRow) => s.subjectId).filter((v): v is number => v != null))
-  );
+    // Sesiones del docente
+    const { data: sessions } = await supabase
+      .from("sessions")
+      .select("id, session_date, start_planned, room_code, status, subjectId")
+      .eq("teacher_user_id", auth.user.id)
+      .order("session_date", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(200);
 
-  const groupMap = new Map<number, GroupRow>();
-  if (groupIds.length) {
-    const { data: groups } = await supabase
-      .from("Group")
-      .select("id, code, subjectId, termId")
-      .in("id", groupIds);
-    (groups as GroupRow[] | null ?? []).forEach((g) => groupMap.set(g.id, g));
+    const subjIds = Array.from(new Set((sessions ?? []).map((s: any) => s.subjectId).filter(Boolean)));
+    const subjMap = new Map<number, string>();
+    if (subjIds.length) {
+      const { data: subs } = await supabase.from("Subject").select("id, name").in("id", subjIds);
+      (subs ?? []).forEach((s: any) => subjMap.set(s.id, s.name ?? ""));
+    }
+
+    const mySessions = (sessions ?? []).map((s: any) => ({
+      id: s.id as number,
+      date: s.session_date ?? null,
+      time: hhmm(s.start_planned ?? null),
+      room: s.room_code ?? null,
+      status: s.status ?? null,
+      subjectName: s.subjectId ? (subjMap.get(s.subjectId) ?? null) : null,
+    }));
+
+    return (
+      <div className="max-w-6xl mx-auto p-6 space-y-6">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold">Mi perfil (Docente)</h1>
+            <div className="text-sm opacity-70">{email} · Rol: {role}</div>
+          </div>
+          <a href="/logout" className="px-3 py-2 border rounded text-sm">Cerrar sesión</a>
+        </div>
+
+        {/* Perfil */}
+        <section className="space-y-2">
+          <h2 className="text-lg font-medium">Perfil</h2>
+          <div className="border rounded p-3 text-sm">
+            <div><b>Nombre:</b> {teacherName || "—"}</div>
+            <div><b>Estatus:</b> {tp?.status ?? "—"}</div>
+            <div><b>Correo:</b> {email}</div>
+          </div>
+        </section>
+
+        {/* Mis clases (sesiones) */}
+        <section className="space-y-2">
+          <h2 className="text-lg font-medium">Mis clases</h2>
+          <div className="border rounded">
+            <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
+              <div className="col-span-3 text-black">Fecha</div>
+              <div className="col-span-2 text-black">Hora</div>
+              <div className="col-span-3 text-black">Materia</div>
+              <div className="col-span-2 text-black">Salón</div>
+              <div className="col-span-2 text-black">Acciones</div>
+            </div>
+            <div>
+              {mySessions.map((s) => (
+                <div key={s.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm items-center">
+                  <div className="col-span-3">{s.date ?? "—"}</div>
+                  <div className="col-span-2">{s.time ?? "—"}</div>
+                  <div className="col-span-3">{s.subjectName ?? "—"}</div>
+                  <div className="col-span-2">{s.room ?? "—"}</div>
+                  <div className="col-span-2">
+                    <a className="px-2 py-1 border rounded text-xs" href={`/teacher/sessions/${s.id}`}>Abrir</a>
+                  </div>
+                </div>
+              ))}
+              {!mySessions.length && (
+                <div className="p-4 text-sm opacity-70">Sin sesiones.</div>
+              )}
+            </div>
+          </div>
+        </section>
+      </div>
+    );
   }
 
-  const subjectIdSet = new Set<number>();
-  sessionSubjectIds.forEach((id) => subjectIdSet.add(id));
-  groupMap.forEach((g) => {
-    if (g.subjectId != null) subjectIdSet.add(g.subjectId);
-  });
-  const subjectIds = Array.from(subjectIdSet);
-
-  const subjectMap = new Map<number, SubjectRow>();
-  if (subjectIds.length) {
-    const { data: subjects } = await supabase
-      .from("Subject")
-      .select("id, name")
-      .in("id", subjectIds);
-    (subjects as SubjectRow[] | null ?? []).forEach((s) => subjectMap.set(s.id, s));
-  }
-
-  // Construir clases enriquecidas
-  const classes = (sessions as SessionRow[] | null ?? []).map((s) => {
-    const group = s.group_id ? groupMap.get(s.group_id) ?? null : null;
-    const resolvedSubjectId = s.subjectId ?? (group?.subjectId ?? null);
-    const subjectName = resolvedSubjectId != null ? subjectMap.get(resolvedSubjectId)?.name ?? null : null;
-    const time = hhmmFrom(s.start_planned);
-    return {
-      id: s.id,
-      date: s.session_date,
-      time,
-      room: s.room_code,
-      status: s.status,
-      isManual: !!s.is_manual,
-      startedAt: s.started_at,
-      endedAt: s.ended_at,
-      groupCode: group?.code ?? null,
-      subjectName,
-      withinWindow: withinPlannedWindow(s.session_date, time, s.is_manual, s.ended_at),
-    };
-  });
-
-  // Materias (distintas) derivadas de las clases
-  const subjects = Array.from(
-    new Map(
-      classes
-        .filter((c) => !!c.subjectName)
-        .map((c) => [c.subjectName as string, { name: c.subjectName as string, groupCode: c.groupCode }])
-    ).values()
-  );
-
-  // Mis Grupos (para pestaña "Mis grupos")
-  const { data: myGroups } = await supabase
-    .from("Group")
-    .select("id, code, subjectId, termId, teacher_user_id")
-    .eq("teacher_user_id", uid)
-    .order("code", { ascending: true });
-
-  const termIds = Array.from(new Set((myGroups ?? []).map((g: any) => g.termId).filter(Boolean))) as number[];
-  const subjIds = Array.from(new Set((myGroups ?? []).map((g: any) => g.subjectId).filter(Boolean))) as number[];
-
-  const termMap = new Map<number, { id: number; name: string | null }>();
-  if (termIds.length) {
-    const { data: terms } = await supabase.from("Term").select("id, name").in("id", termIds);
-    (terms as { id: number; name: string | null }[] | null ?? []).forEach((t) => termMap.set(t.id, t));
-  }
-
-  const subjMap = new Map<number, { id: number; name: string | null }>();
-  if (subjIds.length) {
-    const { data: subjs } = await supabase.from("Subject").select("id, name").in("id", subjIds);
-    (subjs as { id: number; name: string | null }[] | null ?? []).forEach((s) => subjMap.set(s.id, s));
-  }
-
-  const groups = (myGroups ?? []).map((g: any) => ({
-    id: g.id as number,
-    code: (g.code as string | null) ?? null,
-    termName: g.termId ? termMap.get(g.termId)?.name ?? null : null,
-    subjectName: g.subjectId ? subjMap.get(g.subjectId)?.name ?? null : null,
-  }));
-
+  // --- Otros roles (admin/staff) -> vista mínima + sugerencia de ir a /staff
   return (
-    <ProfileTabs
-      profile={{ email: me?.email ?? auth.user.email ?? "", role: me?.role ?? "docente" }}
-      classes={classes}
-      subjects={subjects}
-      teacher={(teacher ?? null) as TeacherRow}
-      groups={groups}
-    />
+    <div className="max-w-4xl mx-auto p-6 space-y-6">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold">Mi perfil</h1>
+          <div className="text-sm opacity-70">{email} · Rol: {role || "—"}</div>
+        </div>
+        <a href="/logout" className="px-3 py-2 border rounded text-sm">Cerrar sesión</a>
+      </div>
+
+      <div className="border rounded p-4 text-sm">
+        <p>Tu rol es <b>{role || "—"}</b>. Si eres parte del staff, entra a <a className="underline" href="/staff">/staff</a> para administrar.</p>
+      </div>
+    </div>
   );
 }
-
