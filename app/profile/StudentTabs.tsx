@@ -218,6 +218,9 @@ export default function StudentTabs({
             <div key={c.id} className="border rounded p-3 flex flex-wrap items-center justify-between">
               <div>{c.subjectName ?? "Materia —"} — {c.date ? new Date(c.date).toLocaleDateString() : "—"} {c.time ? `· ${c.time}` : ""}</div>
               <div className="text-sm">Mi asistencia: <b>{c.myStatus}</b></div>
+              {c.myStatus !== "Justificado" && (
+  <a className="text-xs underline" href={`/justifications/new?sessionId=${c.id}`}>Solicitar justificación</a>
+)}
             </div>
           ))}
         </div>
