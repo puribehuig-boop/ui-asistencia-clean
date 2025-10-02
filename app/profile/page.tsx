@@ -226,7 +226,6 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
     }
 
     // 6) Calificaciones finales por grupo (desde v_group_roster)
-    //    group_id -> final_grade
     const finalByGroup = new Map<number, number | null>();
     if (sp?.id != null && groupIds.length) {
       try {
@@ -242,20 +241,11 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
     }
 
     // 7) Derivados para tabs
-    const subjectEntries: [number, { id: number; name: string }][] = [];
-    for (const g of groups ?? []) {
-      const sid = Number(g?.subjectId);
-      if (sid) subjectEntries.push([sid, { id: sid, name: subjectMap.get(sid) ?? "—" }]);
-    }
-    for (const s of sessions ?? []) {
-      const sid = Number(s?.subjectId);
-      if (sid) subjectEntries.push([sid, { id: sid, name: subjectMap.get(sid) ?? "—" }]);
-    }
-    const mySubjectsUnique = Array.from(new Map(subjectEntries).values());
-
-    // Para la tabla "Mis materias": una fila por grupo (materia + calificación)
+    // Para la tabla "Mis materias": una fila por grupo (materia + grupo + periodo + calificación)
     const mySubjectRows = (groups ?? []).map((g: any) => ({
       groupId: Number(g.id),
+      groupCode: g.code ?? `#${g.id}`,
+      termName: g.termId ? (termMap.get(g.termId) ?? "—") : "—",
       subjectName: g.subjectId ? subjectMap.get(g.subjectId) ?? "—" : "—",
       finalGrade: finalByGroup.get(Number(g.id)) ?? null,
     }));
@@ -291,7 +281,6 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
       { key: "resumen", label: "Resumen" },
       { key: "materias", label: "Mis materias" },
       { key: "clases", label: "Mis clases" },
-      { key: "grupos", label: "Mis grupos" },
     ];
 
     return (
@@ -346,20 +335,24 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
           </section>
         )}
 
-        {/* ========== MATERIAS (con Calificación Final) ========== */}
+        {/* ========== MATERIAS (Materia · Grupo · Periodo · Calificación) ========== */}
         {tab === "materias" && (
           <section className="space-y-2">
             <h2 className="text-lg font-medium">Mis materias</h2>
             <div className="border rounded">
               <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
-                <div className="col-span-8 text-black">Materia</div>
-                <div className="col-span-4 text-black">Calificación Final</div>
+                <div className="col-span-5 text-black">Materia</div>
+                <div className="col-span-3 text-black">Grupo</div>
+                <div className="col-span-2 text-black">Periodo</div>
+                <div className="col-span-2 text-black">Calificación Final</div>
               </div>
               <div>
                 {mySubjectRows.map((row) => (
                   <div key={row.groupId} className="grid grid-cols-12 border-t px-3 py-2 text-sm items-center">
-                    <div className="col-span-8">{row.subjectName ?? "—"}</div>
-                    <div className="col-span-4">{row.finalGrade ?? "—"}</div>
+                    <div className="col-span-5">{row.subjectName ?? "—"}</div>
+                    <div className="col-span-3">{row.groupCode ?? "—"}</div>
+                    <div className="col-span-2">{row.termName ?? "—"}</div>
+                    <div className="col-span-2">{row.finalGrade ?? "—"}</div>
                   </div>
                 ))}
                 {!mySubjectRows.length && <div className="p-4 text-sm opacity-70">Sin materias.</div>}
@@ -418,30 +411,6 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
                   </div>
                 ))}
                 {!myClasses.length && <div className="p-4 text-sm opacity-70">Sin clases.</div>}
-              </div>
-            </div>
-          </section>
-        )}
-
-        {/* ========== GRUPOS ========== */}
-        {tab === "grupos" && (
-          <section className="space-y-2">
-            <h2 className="text-lg font-medium">Mis grupos</h2>
-            <div className="border rounded">
-              <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
-                <div className="col-span-4 text-black">Grupo</div>
-                <div className="col-span-4 text-black">Materia</div>
-                <div className="col-span-4 text-black">Periodo</div>
-              </div>
-              <div>
-                {groups.map((g: any) => (
-                  <div key={g.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm items-center">
-                    <div className="col-span-4">{g.code ?? `#${g.id}`}</div>
-                    <div className="col-span-4">{g.subjectId ? subjectMap.get(g.subjectId) ?? "—" : "—"}</div>
-                    <div className="col-span-4">{g.termId ? termMap.get(g.termId) ?? "—" : "—"}</div>
-                  </div>
-                ))}
-                {!groups.length && <div className="p-4 text-sm opacity-70">Sin grupos.</div>}
               </div>
             </div>
           </section>
