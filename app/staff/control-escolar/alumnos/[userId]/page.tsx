@@ -1,5 +1,6 @@
 // app/staff/control-escolar/alumnos/[userId]/page.tsx
 import Link from "next/link";
+import { createSupabaseServerClient } from "@/lib/supabase/serverClient";
 import { supabaseAdmin } from "@/lib/supabase/adminClient";
 
 export const dynamic = "force-dynamic";
@@ -18,20 +19,19 @@ const DOC_LABELS: Record<string, string> = REQUIRED_DOCS.reduce((acc, d) => {
   return acc;
 }, {} as Record<string, string>);
 
-export default async function AlumnoDetallePage({ params }: { params: { userId: string } }) {
-  const supabase = createSupabaseServerClient();
-
 function hhmm(t?: string | null) {
   if (!t) return "—";
-  if (/^\d{4}$/.test(t)) return `${t.slice(0,2)}:${t.slice(2,4)}`;
-  if (/^\d{2}:\d{2}/.test(t)) return t.slice(0,5);
-  return t;
+  const s = String(t);
+  if (/^\d{4}$/.test(s)) return `${s.slice(0, 2)}:${s.slice(2, 4)}`;
+  if (/^\d{2}:\d{2}/.test(s)) return s.slice(0, 5);
+  return s;
 }
 
 export default async function StudentDetailPage({ params }: { params: { userId: string } }) {
-  const userId = params.userId;
+  const supabase = createSupabaseServerClient();
+  const userIdParam = params.userId;
 
-// Guard SSR (solo admin/staff/control_escolar)
+  // Guard SSR (solo admin/staff/control_escolar)
   const { data: auth } = await supabase.auth.getUser();
   if (!auth?.user) {
     return (
@@ -59,17 +59,17 @@ export default async function StudentDetailPage({ params }: { params: { userId: 
   const byUser = await supabase
     .from("StudentProfile")
     .select('id, "fullName", "userId"')
-    .eq("userId", params.userId)
+    .eq("userId", userIdParam)
     .maybeSingle();
 
   if (byUser?.data) {
     student = byUser.data as any;
-  } else if (/^\d+$/.test(params.userId)) {
+  } else if (/^\d+$/.test(userIdParam)) {
     // Si no, intenta por id numérico
     const byId = await supabase
       .from("StudentProfile")
       .select('id, "fullName", "userId"')
-      .eq("id", Number(params.userId))
+      .eq("id", Number(userIdParam))
       .maybeSingle();
     student = (byId?.data as any) ?? null;
   }
@@ -78,7 +78,10 @@ export default async function StudentDetailPage({ params }: { params: { userId: 
     return <div className="p-6">Alumno no encontrado.</div>;
   }
 
-  // Documentos cargados
+  // Identidad "texto" para consultas que mezclan ids (vista v_group_roster y attendance.student_id)
+  const studentIdText = student.userId ?? String(student.id);
+
+  // Documentos cargados (metadatos)
   const { data: docs } = await supabase
     .from("student_documents")
     .select("id, doc_type, storage_path, original_name, status, updated_at, created_at, size_bytes, mime_type")
@@ -87,7 +90,7 @@ export default async function StudentDetailPage({ params }: { params: { userId: 
   const docsByType = new Map<string, any>();
   (docs ?? []).forEach((d) => docsByType.set(d.doc_type, d));
 
-  // URLs firmadas para ver/descargar (si hay archivo)
+  // URLs firmadas para ver/descargar (si hay archivo) — usar server client
   const urlMap: Record<number, string | undefined> = {};
   for (const d of docs ?? []) {
     const objectPath = d.storage_path.replace(/^student-docs\//, "");
@@ -95,35 +98,50 @@ export default async function StudentDetailPage({ params }: { params: { userId: 
     urlMap[d.id] = signed?.signedUrl;
   }
 
-  // Faltantes
+  // Documentos faltantes
   const missing = REQUIRED_DOCS.filter((r) => !docsByType.has(r.value));
 
   // Ruta para "Cargar o editar documentos"
   const slug = student.userId ?? String(student.id);
   const editHref = `/staff/control-escolar/alumnos/${slug}/documentos`;
-  
-  // Perfil y nombre
-  const [{ data: prof }, { data: sp }] = await Promise.all([
-    supabaseAdmin.from("profiles").select("email, role").eq("user_id", userId).maybeSingle(),
-    supabaseAdmin.from("StudentProfile").select('userId, fullName, "first_name","last_name"').eq("userId", userId).maybeSingle(),
-  ]);
+
+  // Perfil y nombre (usa el userId real del estudiante si existe)
+  let prof: { email?: string | null; role?: string | null } | null = null;
+  let sp2: { userId?: string | null; fullName?: string | null; first_name?: string | null; last_name?: string | null } | null = null;
+
+  if (student.userId) {
+    const [{ data: profData }, { data: spData }] = await Promise.all([
+      supabaseAdmin.from("profiles").select("email, role").eq("user_id", student.userId).maybeSingle(),
+      supabaseAdmin.from("StudentProfile").select('userId, fullName, "first_name","last_name"').eq("userId", student.userId).maybeSingle(),
+    ]);
+    prof = profData ?? null;
+    sp2 = spData ?? null;
+  } else {
+    // No hay UUID; intenta al menos obtener nombres por id numérico
+    const { data: spData } = await supabaseAdmin
+      .from("StudentProfile")
+      .select('userId, fullName, "first_name","last_name"')
+      .eq("id", student.id)
+      .maybeSingle();
+    sp2 = spData ?? null;
+  }
 
   const name =
-    sp?.fullName ||
-    [sp?.first_name, sp?.last_name].filter(Boolean).join(" ") ||
+    sp2?.fullName ||
+    [sp2?.first_name, sp2?.last_name].filter(Boolean).join(" ") ||
     prof?.email ||
     "—";
 
-  // Grupos del alumno + calificaciones finales (usa v_group_roster que ya resuelve ids mixtos)
+  // Grupos del alumno + calificaciones finales (vista v_group_roster con id mixto)
   const { data: roster } = await supabaseAdmin
     .from("v_group_roster")
     .select("group_id, student_id_text, final_grade")
-    .eq("student_id_text", userId);
+    .eq("student_id_text", studentIdText);
 
-  const groupIds = Array.from(new Set((roster ?? []).map(r => r.group_id)));
+  const groupIds = Array.from(new Set((roster ?? []).map((r: any) => r.group_id)));
   let groups: any[] = [];
-  let subjectMap = new Map<number, string>();
-  let termMap = new Map<number, string>();
+  const subjectMap = new Map<number, string>();
+  const termMap = new Map<number, string>();
 
   if (groupIds.length) {
     const { data: gRows } = await supabaseAdmin
@@ -132,8 +150,8 @@ export default async function StudentDetailPage({ params }: { params: { userId: 
       .in("id", groupIds);
     groups = gRows ?? [];
 
-    const subjIds = Array.from(new Set(groups.map(g => g.subjectId).filter(Boolean)));
-    const termIds = Array.from(new Set(groups.map(g => g.termId).filter(Boolean)));
+    const subjIds = Array.from(new Set(groups.map((g: any) => g.subjectId).filter(Boolean)));
+    const termIds = Array.from(new Set(groups.map((g: any) => g.termId).filter(Boolean)));
 
     if (subjIds.length) {
       const { data: subs } = await supabaseAdmin.from("Subject").select("id, name").in("id", subjIds);
@@ -158,25 +176,30 @@ export default async function StudentDetailPage({ params }: { params: { userId: 
     sessions = sRows ?? [];
   }
 
-  // Asistencia del alumno (por session_id)
+  // Asistencia del alumno (por session_id) — contempla uuid o id numérico
+  const idsForAttendance: string[] = [String(student.id)];
+  if (student.userId) idsForAttendance.push(student.userId);
+
   const { data: attRows } = await supabaseAdmin
     .from("attendance")
     .select("session_id, status, updated_at")
-    .eq("student_id", userId);
+    .in("student_id", idsForAttendance);
 
   const attBySession = new Map<number, { status: string; updated_at: string | null }>();
-  (attRows ?? []).forEach((a: any) => attBySession.set(a.session_id, { status: a.status, updated_at: a.updated_at ?? null }));
+  (attRows ?? []).forEach((a: any) => {
+    attBySession.set(a.session_id, { status: a.status, updated_at: a.updated_at ?? null });
+  });
 
   // Helpers pintables
-  const groupsView = groups.map(g => ({
+  const groupsView = groups.map((g: any) => ({
     id: g.id,
     code: g.code ?? null,
     subjectName: g.subjectId ? (subjectMap.get(g.subjectId) ?? null) : null,
     termName: g.termId ? (termMap.get(g.termId) ?? null) : null,
-    finalGrade: (roster ?? []).find(r => r.group_id === g.id)?.final_grade ?? null,
+    finalGrade: (roster ?? []).find((r: any) => r.group_id === g.id)?.final_grade ?? null,
   }));
 
-  const sessionsView = sessions.map(s => ({
+  const sessionsView = sessions.map((s: any) => ({
     id: s.id,
     date: s.session_date ?? null,
     time: hhmm(s.start_planned ?? null),
@@ -190,7 +213,9 @@ export default async function StudentDetailPage({ params }: { params: { userId: 
     <div className="space-y-6">
       <div>
         <h1 className="text-lg font-semibold">Alumno: {name}</h1>
-        <div className="text-sm opacity-70">{prof?.email ?? "—"} · Rol: {prof?.role ?? "—"}</div>
+        <div className="text-sm opacity-70">
+          {(prof?.email ?? "—")} · Rol: {(prof?.role ?? "—")}
+        </div>
       </div>
 
       {/* Nav local simple */}
@@ -203,7 +228,7 @@ export default async function StudentDetailPage({ params }: { params: { userId: 
       </div>
 
       {/* Sección: Información y documentos */}
-      <section className="space-y-3">
+      <section id="info" className="space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-medium">Documentación</h2>
           <Link href={editHref} className="px-3 py-1 border rounded text-sm hover:bg-gray-50">
@@ -293,7 +318,7 @@ export default async function StudentDetailPage({ params }: { params: { userId: 
             <div className="col-span-3 text-black">Calificación final</div>
           </div>
           <div>
-            {groupsView.map(g => (
+            {groupsView.map((g) => (
               <div key={g.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm">
                 <div className="col-span-5">
                   <b>{g.subjectName ?? "—"}</b>
@@ -320,7 +345,7 @@ export default async function StudentDetailPage({ params }: { params: { userId: 
             <div className="col-span-2 text-black">Estado</div>
           </div>
           <div>
-            {sessionsView.map(s => (
+            {sessionsView.map((s) => (
               <div key={s.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm">
                 <div className="col-span-3">{s.date ?? "—"}</div>
                 <div className="col-span-2">{s.time ?? "—"}</div>
@@ -344,7 +369,7 @@ export default async function StudentDetailPage({ params }: { params: { userId: 
             <div className="col-span-4 text-black">Mi estado</div>
           </div>
           <div>
-            {sessionsView.map(s => (
+            {sessionsView.map((s) => (
               <div key={s.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm">
                 <div className="col-span-4">{s.date ?? "—"} · {s.subjectName ?? "—"}</div>
                 <div className="col-span-4">{s.room ?? "—"} · #{s.id}</div>
