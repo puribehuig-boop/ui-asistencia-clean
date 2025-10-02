@@ -19,6 +19,32 @@ function ymdToDate(ymd?: string | null) {
   return new Date(y, m - 1, d);
 }
 
+function combineDateTime(ymd?: string | null, t?: string | null) {
+  const d = ymdToDate(ymd);
+  if (!d) return null;
+  if (!t) return d;
+
+  const s = String(t);
+  let h = 0, m = 0;
+
+  if (/^\d{4}$/.test(s)) {
+    // "HHmm"
+    h = Number(s.slice(0, 2));
+    m = Number(s.slice(2, 4));
+  } else if (/^\d{2}:\d{2}(:\d{2})?$/.test(s)) {
+    // "HH:MM" o "HH:MM:SS"
+    const [hh, mm] = s.split(":");
+    h = Number(hh);
+    m = Number(mm);
+  } else {
+    // formato desconocido: usa medianoche
+    return d;
+  }
+  d.setHours(h, m, 0, 0);
+  return d;
+}
+
+
 function TabNav({ tab, tabs }: { tab: string; tabs: { key: string; label: string }[] }) {
   return (
     <div className="flex gap-2 border-b">
@@ -267,6 +293,7 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
         canJustify,
         justifyStatus: jst ?? null,
         startDate: ymdToDate(s.session_date ?? null),
+        startAt: combineDateTime(s.session_date ?? null, s.start_planned ?? null),
       };
     });
 
