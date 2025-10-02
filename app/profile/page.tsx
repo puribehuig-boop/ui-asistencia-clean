@@ -210,16 +210,20 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
       myStatus: attBySession.get(s.id)?.status ?? "—",
     }));
 
-    const mySubjects = Array.from(
-      new Map(
-        [
-          // materias desde grupos
-          ...((groups ?? []).map((g: any) => [g.subjectId, { id: g.subjectId, name: subjectMap.get(g.subjectId) ?? "—" }]) ?? []),
-          // materias derivadas desde sesiones si no hubo grupos
-          ...((sessions ?? []).map((s: any) => [s.subjectId, { id: s.subjectId, name: subjectMap.get(s.subjectId) ?? "—" }]) ?? []),
-        ].filter(([id]) => !!id)
-      ).values()
-    );
+    // Construye entradas tipadas de sujeto desde grupos y sesiones (dedup luego con Map)
+const subjectEntries: [number, { id: number; name: string }][] = [];
+
+for (const g of groups ?? []) {
+  const sid = Number(g?.subjectId);
+  if (sid) subjectEntries.push([sid, { id: sid, name: subjectMap.get(sid) ?? "—" }]);
+}
+for (const s of sessions ?? []) {
+  const sid = Number(s?.subjectId);
+  if (sid) subjectEntries.push([sid, { id: sid, name: subjectMap.get(sid) ?? "—" }]);
+}
+
+// Deduplicar por subjectId conservando el último nombre resuelto
+const mySubjects = Array.from(new Map(subjectEntries).values());
 
     const tabs = [
       { key: "resumen", label: "Resumen" },
