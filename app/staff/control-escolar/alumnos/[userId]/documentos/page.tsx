@@ -46,11 +46,14 @@ export default async function AlumnoDocumentosPage({ params }: { params: { userI
     .order("doc_type", { ascending: true });
 
   // Crear URLs firmadas para ver/descargar
-  const urls: Record<number, string | null> = {};
-  for (const d of docs ?? []) {
-    const { data: signed } = await supabase.storage.from("student-docs").createSignedUrl(d.storage_path.replace(/^student-docs\//, ""), 300);
-    urls[d.id] = signed?.signedUrl ?? null;
-  }
+const urlMap: Record<number, string | undefined> = {};
+for (const d of docs ?? []) {
+  const objPath = d.storage_path.replace(/^student-docs\//, "");
+  const { data: signed } = await supabase.storage
+    .from("student-docs")
+    .createSignedUrl(objPath, 300);
+  urlMap[d.id] = signed?.signedUrl;
+}
 
   return (
     <div className="p-4 space-y-6">
@@ -87,7 +90,15 @@ export default async function AlumnoDocumentosPage({ params }: { params: { userI
               </div>
               <div className="col-span-2">{new Date(d.updated_at ?? d.created_at).toLocaleString()}</div>
               <div className="col-span-2 flex gap-2">
-                {urls[d.id] && <a className="text-xs underline" href={urls[d.id]} target="_blank">Ver</a>}
+                {(() => {
+                  const u = urlMap[d.id];
+                  return u ? (
+                    <a className="text-xs underline" href={u} target="_blank" rel="noreferrer">
+                      Ver
+                    </a>
+                  ) : null;
+                })()}
+              
                 {/* Acciones rápidas de estatus */}
                 <form action={`/api/staff/docs/status`} method="post" className="flex gap-1">
                   <input type="hidden" name="docId" value={d.id} />
