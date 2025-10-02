@@ -52,7 +52,7 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
     const { data: sp } = await supabase
       .from("StudentProfile")
       .select('id, "userId", "fullName", "first_name", "last_name"')
-      .eq("userId", auth.user.id) // "userId" es TEXT; auth.user.id llega como string uuid -> OK
+      .eq("userId", auth.user.id)
       .maybeSingle();
 
     const studentName =
@@ -60,24 +60,23 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
       [sp?.first_name, sp?.last_name].filter(Boolean).join(" ") ||
       email;
 
-    // 2) Intento principal (canónico): Enrollment -> Group -> Sessions
+    // 2) Intento canónico: Enrollment -> Group -> Sessions
     let groupIds: number[] = [];
     if (sp?.id != null) {
-      const { data: enr, error } = await supabase
+      const { data: enr } = await supabase
         .from("Enrollment")
         .select('"groupId"')
         .eq("studentId", sp.id);
       groupIds = Array.from(new Set((enr ?? []).map((r: any) => Number(r.groupId)).filter(Boolean)));
     }
 
-    // 3) Catálogos
+    // 3) Catálogos y sesiones (camino canónico)
     let groups: any[] = [];
     let sessions: any[] = [];
     const subjectMap = new Map<number, string>();
     const termMap = new Map<number, string>();
 
     if (groupIds.length) {
-      // ——— Camino canónico ———
       const { data: gRows } = await supabase
         .from("Group")
         .select("id, code, subjectId, termId, teacher_user_id")
@@ -106,9 +105,7 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
       sessions = sRows ?? [];
     }
 
-    // 4) Fallback si no hay grupos (o están vacíos):
-    //    Construir desde ASSISTANCE -> SESSION_IDs
-    //    Esto cubre el caso que mencionas: hay asistencia real, pero no hay Enrollment.
+    // 4) Fallback si no hay grupos o sesiones: construir desde asistencia
     if (!groupIds.length || (!groups.length && !sessions.length)) {
       // a) asistencia por uuid moderno
       const attUuid = await supabase
@@ -117,17 +114,17 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
         .eq("student_user_id", auth.user.id);
 
       // b) asistencia por llaves legacy (uuid en texto + StudentProfile.id)
-      const candIds: string[] = [auth.user.id];
-      if (sp?.id != null) candIds.push(String(sp.id));
+      const candidateIds: string[] = [auth.user.id];
+      if (sp?.id != null) candidateIds.push(String(sp.id));
 
-      const attLegacy = candIds.length
-        ? await supabase
-            .from("attendance")
-            .select("session_id, status, updated_at")
-            .in("student_id", candIds)
-        : { data: [] as any[], error: null };
+      const attLegacy =
+        candidateIds.length > 0
+          ? await supabase
+              .from("attendance")
+              .select("session_id, status, updated_at")
+              .in("student_id", candidateIds)
+          : { data: [] as any[], error: null };
 
-      // c) set de sesiones desde asistencia
       const attRows = [...(attUuid.data ?? []), ...(attLegacy.data ?? [])];
       const sessionIdSet = new Set<number>((attRows ?? []).map((r: any) => Number(r.session_id)).filter(Boolean));
 
@@ -139,7 +136,7 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
           .in("id", ids);
         sessions = sRows2 ?? [];
 
-        // d) Derivar groups y catálogos desde las sesiones
+        // Derivar groups y catálogos desde las sesiones
         const derivedGroupIds = Array.from(
           new Set((sessions ?? []).map((s: any) => Number(s.group_id)).filter(Boolean))
         );
@@ -163,9 +160,7 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
           }
         } else {
           // Si las sesiones no tienen group_id, al menos resolvemos materias por subjectId
-          const subjIds3 = Array.from(
-            new Set((sessions ?? []).map((s: any) => s.subjectId).filter(Boolean))
-          );
+          const subjIds3 = Array.from(new Set((sessions ?? []).map((s: any) => s.subjectId).filter(Boolean)));
           if (subjIds3.length) {
             const { data: subs3 } = await supabase.from("Subject").select("id, name").in("id", subjIds3);
             (subs3 ?? []).forEach((s: any) => subjectMap.set(s.id, s.name ?? ""));
@@ -174,7 +169,7 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
       }
     }
 
-    // 5) Asistencia (para pintar el estado por sesión)
+    // 5) Asistencia (más reciente gana)
     const attUuid2 = await supabase
       .from("attendance")
       .select("session_id, status, updated_at")
@@ -183,47 +178,81 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
     const candIds2: string[] = [auth.user.id];
     if (sp?.id != null) candIds2.push(String(sp.id));
 
-    const attLegacy2 = candIds2.length
-      ? await supabase
-          .from("attendance")
-          .select("session_id, status, updated_at")
-          .in("student_id", candIds2)
-      : { data: [] as any[], error: null };
+    const attLegacy2 =
+      candIds2.length > 0
+        ? await supabase
+            .from("attendance")
+            .select("session_id, status, updated_at")
+            .in("student_id", candIds2)
+        : { data: [] as any[], error: null };
 
     const attRows2 = [...(attUuid2.data ?? []), ...(attLegacy2.data ?? [])];
+
+    // Elegir por sesión la fila con mayor updated_at; en empate, prioriza Justificado
     const attBySession = new Map<number, { status: string; updated_at: string | null }>();
+    const newer = (a?: string | null, b?: string | null) =>
+      new Date(a ?? "1970-01-01T00:00:00Z").getTime() - new Date(b ?? "1970-01-01T00:00:00Z").getTime();
+
     for (const r of attRows2) {
-      if (!attBySession.has(r.session_id)) {
+      const prev = attBySession.get(r.session_id);
+      if (!prev || newer(r.updated_at, prev.updated_at) > 0) {
+        attBySession.set(r.session_id, { status: r.status, updated_at: r.updated_at ?? null });
+      } else if (prev && r.status === "Justificado" && prev.status !== "Justificado") {
         attBySession.set(r.session_id, { status: r.status, updated_at: r.updated_at ?? null });
       }
     }
 
+    // 5.b) Justificaciones existentes (solo con student_id, sin nuevas columnas)
+    const sessionIdsForView = (sessions ?? []).map((s: any) => Number(s.id)).filter(Boolean);
+    const candidateIdsForJust: string[] = [auth.user.id];
+    if (sp?.id != null) candidateIdsForJust.push(String(sp.id));
+
+    let myJustBySession = new Map<number, string>(); // session_id -> status
+    if (sessionIdsForView.length && candidateIdsForJust.length) {
+      try {
+        const { data: justs } = await supabase
+          .from("attendance_justifications")
+          .select("session_id, status, student_id")
+          .in("session_id", sessionIdsForView)
+          .in("student_id", candidateIdsForJust);
+        (justs ?? []).forEach((j: any) => {
+          myJustBySession.set(Number(j.session_id), j.status);
+        });
+      } catch {
+        // Si la tabla no existe en algún entorno, simplemente no bloqueamos el botón
+      }
+    }
+
     // 6) Derivados para tabs
-    const myClasses = (sessions ?? []).map((s: any) => ({
-      id: s.id as number,
-      date: s.session_date ?? null,
-      time: hhmm(s.start_planned ?? null),
-      room: s.room_code ?? null,
-      status: s.status ?? null,
-      groupId: s.group_id ?? null,
-      subjectName: s.subjectId ? (subjectMap.get(s.subjectId) ?? null) : null,
-      myStatus: attBySession.get(s.id)?.status ?? "—",
-    }));
+    const subjectEntries: [number, { id: number; name: string }][] = [];
+    for (const g of groups ?? []) {
+      const sid = Number(g?.subjectId);
+      if (sid) subjectEntries.push([sid, { id: sid, name: subjectMap.get(sid) ?? "—" }]);
+    }
+    for (const s of sessions ?? []) {
+      const sid = Number(s?.subjectId);
+      if (sid) subjectEntries.push([sid, { id: sid, name: subjectMap.get(sid) ?? "—" }]);
+    }
+    const mySubjects = Array.from(new Map(subjectEntries).values());
 
-    // Construye entradas tipadas de sujeto desde grupos y sesiones (dedup luego con Map)
-const subjectEntries: [number, { id: number; name: string }][] = [];
-
-for (const g of groups ?? []) {
-  const sid = Number(g?.subjectId);
-  if (sid) subjectEntries.push([sid, { id: sid, name: subjectMap.get(sid) ?? "—" }]);
-}
-for (const s of sessions ?? []) {
-  const sid = Number(s?.subjectId);
-  if (sid) subjectEntries.push([sid, { id: sid, name: subjectMap.get(sid) ?? "—" }]);
-}
-
-// Deduplicar por subjectId conservando el último nombre resuelto
-const mySubjects = Array.from(new Map(subjectEntries).values());
+    const myClasses = (sessions ?? []).map((s: any) => {
+      const sid = Number(s.id);
+      const status = attBySession.get(sid)?.status ?? "—";
+      const jst = myJustBySession.get(sid); // 'pending' | 'approved' | 'rejected' | undefined
+      const canJustify = !jst && status !== "Justificado";
+      return {
+        id: sid,
+        date: s.session_date ?? null,
+        time: hhmm(s.start_planned ?? null),
+        room: s.room_code ?? null,
+        status: s.status ?? null,
+        groupId: s.group_id ?? null,
+        subjectName: s.subjectId ? subjectMap.get(s.subjectId) ?? null : null,
+        myStatus: status,
+        canJustify,
+        justifyStatus: jst ?? null,
+      };
+    });
 
     const tabs = [
       { key: "resumen", label: "Resumen" },
@@ -240,7 +269,7 @@ const mySubjects = Array.from(new Map(subjectEntries).values());
             <h1 className="text-2xl font-semibold">Mi perfil (Alumno)</h1>
             <div className="text-sm opacity-70">{email} · Rol: {role}</div>
           </div>
-        <a href="/logout" className="px-3 py-2 border rounded text-sm">Cerrar sesión</a>
+          <a href="/logout" className="px-3 py-2 border rounded text-sm">Cerrar sesión</a>
         </div>
 
         <TabNav tab={tab} tabs={tabs} />
@@ -265,7 +294,8 @@ const mySubjects = Array.from(new Map(subjectEntries).values());
                     <div className="col-span-3">{c.subjectName ?? "—"}</div>
                     <div className="col-span-2">{c.room ?? "—"}</div>
                     <div className="col-span-2 flex items-center gap-2">
-                      <span className="px-2 py-0.5 rounded text-white text-xs"
+                      <span
+                        className="px-2 py-0.5 rounded text-white text-xs"
                         style={{
                           background:
                             c.myStatus === "Presente" ? "#16a34a" :
@@ -276,8 +306,19 @@ const mySubjects = Array.from(new Map(subjectEntries).values());
                       >
                         {c.myStatus}
                       </span>
-                      {c.myStatus !== "Justificado" && (
-                        <a className="text-xs underline" href={`/justifications/new?sessionId=${c.id}`}>Justificar</a>
+
+                      {c.justifyStatus && (
+                        <span className="text-xs opacity-70">
+                          {c.justifyStatus === "pending" && "Solicitud enviada"}
+                          {c.justifyStatus === "approved" && "Justificación aprobada"}
+                          {c.justifyStatus === "rejected" && "Justificación rechazada"}
+                        </span>
+                      )}
+
+                      {c.canJustify && (
+                        <a className="text-xs underline" href={`/justifications/new?sessionId=${c.id}`}>
+                          Justificar
+                        </a>
                       )}
                     </div>
                   </div>
@@ -349,8 +390,8 @@ const mySubjects = Array.from(new Map(subjectEntries).values());
                 {groups.map((g: any) => (
                   <div key={g.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm items-center">
                     <div className="col-span-4">{g.code ?? `#${g.id}`}</div>
-                    <div className="col-span-4">{g.subjectId ? (subjectMap.get(g.subjectId) ?? "—") : "—"}</div>
-                    <div className="col-span-4">{g.termId ? (termMap.get(g.termId) ?? "—") : "—"}</div>
+                    <div className="col-span-4">{g.subjectId ? subjectMap.get(g.subjectId) ?? "—" : "—"}</div>
+                    <div className="col-span-4">{g.termId ? termMap.get(g.termId) ?? "—" : "—"}</div>
                   </div>
                 ))}
                 {!groups.length && <div className="p-4 text-sm opacity-70">Sin grupos.</div>}
@@ -362,7 +403,7 @@ const mySubjects = Array.from(new Map(subjectEntries).values());
     );
   }
 
-  /** ========================= DOCENTE (igual que antes) ========================= */
+  /** ========================= DOCENTE ========================= */
   if (role === "docente") {
     const { data: tp } = await supabase
       .from("teacher_profile")
