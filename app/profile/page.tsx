@@ -36,7 +36,7 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
 
   const tab = (searchParams?.tab ?? "").toLowerCase() || "resumen";
 
-  // Perfil base
+  // Perfil base (correo + rol)
   const { data: me } = await supabase
     .from("profiles")
     .select("email, role")
@@ -48,11 +48,11 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
 
   /** ========================= ALUMNO ========================= */
   if (role === "alumno" || role === "student") {
-    // StudentProfile
+    // 1) StudentProfile (id numérico + nombre)
     const { data: sp } = await supabase
       .from("StudentProfile")
       .select('id, "userId", "fullName", "first_name", "last_name"')
-      .eq("userId", auth.user.id)
+      .eq("userId", auth.user.id) // "userId" es TEXT; auth.user.id llega como string uuid -> OK
       .maybeSingle();
 
     const studentName =
@@ -60,77 +60,146 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
       [sp?.first_name, sp?.last_name].filter(Boolean).join(" ") ||
       email;
 
-    // Enrollment → mis grupos
+    // 2) Intento principal (canónico): Enrollment -> Group -> Sessions
     let groupIds: number[] = [];
     if (sp?.id != null) {
-      const { data: enr } = await supabase
+      const { data: enr, error } = await supabase
         .from("Enrollment")
         .select('"groupId"')
         .eq("studentId", sp.id);
       groupIds = Array.from(new Set((enr ?? []).map((r: any) => Number(r.groupId)).filter(Boolean)));
     }
 
-    // Catálogos de grupos/materias/periodos
-    const groups = groupIds.length
-      ? (await supabase.from("Group").select("id, code, subjectId, termId, teacher_user_id").in("id", groupIds)).data ?? []
-      : [];
-
-    const subjIds = Array.from(new Set(groups.map((g: any) => g.subjectId).filter(Boolean)));
-    const termIds = Array.from(new Set(groups.map((g: any) => g.termId).filter(Boolean)));
-
-    const subjects = subjIds.length
-      ? (await supabase.from("Subject").select("id, name").in("id", subjIds)).data ?? []
-      : [];
-    const terms = termIds.length
-      ? (await supabase.from("Term").select("id, name").in("id", termIds)).data ?? []
-      : [];
-
+    // 3) Catálogos
+    let groups: any[] = [];
+    let sessions: any[] = [];
     const subjectMap = new Map<number, string>();
-    subjects.forEach((s: any) => subjectMap.set(s.id, s.name ?? ""));
     const termMap = new Map<number, string>();
-    terms.forEach((t: any) => termMap.set(t.id, t.name ?? ""));
 
-    // Mis clases (sesiones) derivadas de mis grupos
-    const sessions = groupIds.length
-      ? (await supabase
+    if (groupIds.length) {
+      // ——— Camino canónico ———
+      const { data: gRows } = await supabase
+        .from("Group")
+        .select("id, code, subjectId, termId, teacher_user_id")
+        .in("id", groupIds);
+      groups = gRows ?? [];
+
+      const subjIds = Array.from(new Set(groups.map((g: any) => g.subjectId).filter(Boolean)));
+      const termIds = Array.from(new Set(groups.map((g: any) => g.termId).filter(Boolean)));
+
+      if (subjIds.length) {
+        const { data: subs } = await supabase.from("Subject").select("id, name").in("id", subjIds);
+        (subs ?? []).forEach((s: any) => subjectMap.set(s.id, s.name ?? ""));
+      }
+      if (termIds.length) {
+        const { data: terms } = await supabase.from("Term").select("id, name").in("id", termIds);
+        (terms ?? []).forEach((t: any) => termMap.set(t.id, t.name ?? ""));
+      }
+
+      const { data: sRows } = await supabase
+        .from("sessions")
+        .select("id, session_date, start_planned, room_code, status, group_id, subjectId")
+        .in("group_id", groupIds)
+        .order("session_date", { ascending: false })
+        .order("id", { ascending: false })
+        .limit(200);
+      sessions = sRows ?? [];
+    }
+
+    // 4) Fallback si no hay grupos (o están vacíos):
+    //    Construir desde ASSISTANCE -> SESSION_IDs
+    //    Esto cubre el caso que mencionas: hay asistencia real, pero no hay Enrollment.
+    if (!groupIds.length || (!groups.length && !sessions.length)) {
+      // a) asistencia por uuid moderno
+      const attUuid = await supabase
+        .from("attendance")
+        .select("session_id, status, updated_at")
+        .eq("student_user_id", auth.user.id);
+
+      // b) asistencia por llaves legacy (uuid en texto + StudentProfile.id)
+      const candIds: string[] = [auth.user.id];
+      if (sp?.id != null) candIds.push(String(sp.id));
+
+      const attLegacy = candIds.length
+        ? await supabase
+            .from("attendance")
+            .select("session_id, status, updated_at")
+            .in("student_id", candIds)
+        : { data: [] as any[], error: null };
+
+      // c) set de sesiones desde asistencia
+      const attRows = [...(attUuid.data ?? []), ...(attLegacy.data ?? [])];
+      const sessionIdSet = new Set<number>((attRows ?? []).map((r: any) => Number(r.session_id)).filter(Boolean));
+
+      if (sessionIdSet.size) {
+        const ids = Array.from(sessionIdSet);
+        const { data: sRows2 } = await supabase
           .from("sessions")
           .select("id, session_date, start_planned, room_code, status, group_id, subjectId")
-          .in("group_id", groupIds)
-          .order("session_date", { ascending: false })
-          .order("id", { ascending: false })
-          .limit(200)).data ?? []
-      : [];
+          .in("id", ids);
+        sessions = sRows2 ?? [];
 
-    // === FIX asistencia: leer por dos llaves (uuid moderno y legacy) ===
-    const attUuid = await supabase
+        // d) Derivar groups y catálogos desde las sesiones
+        const derivedGroupIds = Array.from(
+          new Set((sessions ?? []).map((s: any) => Number(s.group_id)).filter(Boolean))
+        );
+        if (derivedGroupIds.length) {
+          const { data: gRows2 } = await supabase
+            .from("Group")
+            .select("id, code, subjectId, termId, teacher_user_id")
+            .in("id", derivedGroupIds);
+          groups = gRows2 ?? [];
+
+          const subjIds2 = Array.from(new Set(groups.map((g: any) => g.subjectId).filter(Boolean)));
+          const termIds2 = Array.from(new Set(groups.map((g: any) => g.termId).filter(Boolean)));
+
+          if (subjIds2.length) {
+            const { data: subs2 } = await supabase.from("Subject").select("id, name").in("id", subjIds2);
+            (subs2 ?? []).forEach((s: any) => subjectMap.set(s.id, s.name ?? ""));
+          }
+          if (termIds2.length) {
+            const { data: terms2 } = await supabase.from("Term").select("id, name").in("id", termIds2);
+            (terms2 ?? []).forEach((t: any) => termMap.set(t.id, t.name ?? ""));
+          }
+        } else {
+          // Si las sesiones no tienen group_id, al menos resolvemos materias por subjectId
+          const subjIds3 = Array.from(
+            new Set((sessions ?? []).map((s: any) => s.subjectId).filter(Boolean))
+          );
+          if (subjIds3.length) {
+            const { data: subs3 } = await supabase.from("Subject").select("id, name").in("id", subjIds3);
+            (subs3 ?? []).forEach((s: any) => subjectMap.set(s.id, s.name ?? ""));
+          }
+        }
+      }
+    }
+
+    // 5) Asistencia (para pintar el estado por sesión)
+    const attUuid2 = await supabase
       .from("attendance")
       .select("session_id, status, updated_at")
       .eq("student_user_id", auth.user.id);
 
-    const candidateIds: string[] = [auth.user.id];
-    if (sp?.id != null) candidateIds.push(String(sp.id));
+    const candIds2: string[] = [auth.user.id];
+    if (sp?.id != null) candIds2.push(String(sp.id));
 
-    const attLegacy = candidateIds.length
+    const attLegacy2 = candIds2.length
       ? await supabase
           .from("attendance")
           .select("session_id, status, updated_at")
-          .in("student_id", candidateIds)
+          .in("student_id", candIds2)
       : { data: [] as any[], error: null };
 
-    const attRows = [...(attUuid.data ?? []), ...(attLegacy.data ?? [])];
+    const attRows2 = [...(attUuid2.data ?? []), ...(attLegacy2.data ?? [])];
     const attBySession = new Map<number, { status: string; updated_at: string | null }>();
-    for (const r of attRows) {
+    for (const r of attRows2) {
       if (!attBySession.has(r.session_id)) {
         attBySession.set(r.session_id, { status: r.status, updated_at: r.updated_at ?? null });
       }
     }
 
-    // Derivados para tabs
-    const mySubjects = Array.from(
-      new Map(groups.map((g: any) => [g.subjectId, { id: g.subjectId, name: subjectMap.get(g.subjectId) ?? "—" }])).values()
-    );
-
-    const myClasses = sessions.map((s: any) => ({
+    // 6) Derivados para tabs
+    const myClasses = (sessions ?? []).map((s: any) => ({
       id: s.id as number,
       date: s.session_date ?? null,
       time: hhmm(s.start_planned ?? null),
@@ -140,6 +209,17 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
       subjectName: s.subjectId ? (subjectMap.get(s.subjectId) ?? null) : null,
       myStatus: attBySession.get(s.id)?.status ?? "—",
     }));
+
+    const mySubjects = Array.from(
+      new Map(
+        [
+          // materias desde grupos
+          ...((groups ?? []).map((g: any) => [g.subjectId, { id: g.subjectId, name: subjectMap.get(g.subjectId) ?? "—" }]) ?? []),
+          // materias derivadas desde sesiones si no hubo grupos
+          ...((sessions ?? []).map((s: any) => [s.subjectId, { id: s.subjectId, name: subjectMap.get(s.subjectId) ?? "—" }]) ?? []),
+        ].filter(([id]) => !!id)
+      ).values()
+    );
 
     const tabs = [
       { key: "resumen", label: "Resumen" },
@@ -156,7 +236,7 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
             <h1 className="text-2xl font-semibold">Mi perfil (Alumno)</h1>
             <div className="text-sm opacity-70">{email} · Rol: {role}</div>
           </div>
-          <a href="/logout" className="px-3 py-2 border rounded text-sm">Cerrar sesión</a>
+        <a href="/logout" className="px-3 py-2 border rounded text-sm">Cerrar sesión</a>
         </div>
 
         <TabNav tab={tab} tabs={tabs} />
@@ -216,10 +296,7 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
                 {mySubjects.map((s: any) => (
                   <div key={s.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm items-center">
                     <div className="col-span-8">{s.name ?? "—"}</div>
-                    <div className="col-span-4">
-                      {/* placeholder para acciones futuras */}
-                      <span className="text-xs opacity-60">—</span>
-                    </div>
+                    <div className="col-span-4"><span className="text-xs opacity-60">—</span></div>
                   </div>
                 ))}
                 {!mySubjects.length && <div className="p-4 text-sm opacity-70">Sin materias.</div>}
@@ -281,7 +358,7 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
     );
   }
 
-  /** ========================= DOCENTE ========================= */
+  /** ========================= DOCENTE (igual que antes) ========================= */
   if (role === "docente") {
     const { data: tp } = await supabase
       .from("teacher_profile")
