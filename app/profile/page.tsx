@@ -12,6 +12,12 @@ function hhmm(t?: string | null) {
   if (/^\d{2}:\d{2}/.test(s)) return s.slice(0, 5);
   return s;
 }
+function ymdToDate(ymd?: string | null) {
+  if (!ymd) return null;
+  const [y, m, d] = ymd.split("-").map((n) => Number(n));
+  if (!y || !m || !d) return null;
+  return new Date(y, m - 1, d);
+}
 
 function TabNav({ tab, tabs }: { tab: string; tabs: { key: string; label: string }[] }) {
   return (
@@ -60,7 +66,7 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
       [sp?.first_name, sp?.last_name].filter(Boolean).join(" ") ||
       email;
 
-    // 2) Intento canónico: Enrollment -> Group -> Sessions
+    // 2) Camino canónico: Enrollment -> Group -> Sessions
     let groupIds: number[] = [];
     if (sp?.id != null) {
       const { data: enr } = await supabase
@@ -70,7 +76,7 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
       groupIds = Array.from(new Set((enr ?? []).map((r: any) => Number(r.groupId)).filter(Boolean)));
     }
 
-    // 3) Catálogos y sesiones (camino canónico)
+    // 3) Catálogos y sesiones (canónico)
     let groups: any[] = [];
     let sessions: any[] = [];
     const subjectMap = new Map<number, string>();
@@ -136,7 +142,6 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
           .in("id", ids);
         sessions = sRows2 ?? [];
 
-        // Derivar groups y catálogos desde las sesiones
         const derivedGroupIds = Array.from(
           new Set((sessions ?? []).map((s: any) => Number(s.group_id)).filter(Boolean))
         );
@@ -159,7 +164,6 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
             (terms2 ?? []).forEach((t: any) => termMap.set(t.id, t.name ?? ""));
           }
         } else {
-          // Si las sesiones no tienen group_id, al menos resolvemos materias por subjectId
           const subjIds3 = Array.from(new Set((sessions ?? []).map((s: any) => s.subjectId).filter(Boolean)));
           if (subjIds3.length) {
             const { data: subs3 } = await supabase.from("Subject").select("id, name").in("id", subjIds3);
@@ -202,7 +206,7 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
       }
     }
 
-    // 5.b) Justificaciones existentes (solo con student_id, sin nuevas columnas)
+    // 5.b) Justificaciones existentes (solo con student_id)
     const sessionIdsForView = (sessions ?? []).map((s: any) => Number(s.id)).filter(Boolean);
     const candidateIdsForJust: string[] = [auth.user.id];
     if (sp?.id != null) candidateIdsForJust.push(String(sp.id));
@@ -218,12 +222,26 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
         (justs ?? []).forEach((j: any) => {
           myJustBySession.set(Number(j.session_id), j.status);
         });
+      } catch {}
+    }
+
+    // 6) Calificaciones finales por grupo (desde v_group_roster)
+    //    group_id -> final_grade
+    const finalByGroup = new Map<number, number | null>();
+    if (sp?.id != null && groupIds.length) {
+      try {
+        const { data: roster } = await supabase
+          .from("v_group_roster")
+          .select("group_id, student_id, final_grade")
+          .in("group_id", groupIds)
+          .eq("student_id", sp.id);
+        (roster ?? []).forEach((r: any) => finalByGroup.set(Number(r.group_id), r.final_grade ?? null));
       } catch {
-        // Si la tabla no existe en algún entorno, simplemente no bloqueamos el botón
+        // si la vista no existe en algún entorno, se dejan como null
       }
     }
 
-    // 6) Derivados para tabs
+    // 7) Derivados para tabs
     const subjectEntries: [number, { id: number; name: string }][] = [];
     for (const g of groups ?? []) {
       const sid = Number(g?.subjectId);
@@ -233,7 +251,14 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
       const sid = Number(s?.subjectId);
       if (sid) subjectEntries.push([sid, { id: sid, name: subjectMap.get(sid) ?? "—" }]);
     }
-    const mySubjects = Array.from(new Map(subjectEntries).values());
+    const mySubjectsUnique = Array.from(new Map(subjectEntries).values());
+
+    // Para la tabla "Mis materias": una fila por grupo (materia + calificación)
+    const mySubjectRows = (groups ?? []).map((g: any) => ({
+      groupId: Number(g.id),
+      subjectName: g.subjectId ? subjectMap.get(g.subjectId) ?? "—" : "—",
+      finalGrade: finalByGroup.get(Number(g.id)) ?? null,
+    }));
 
     const myClasses = (sessions ?? []).map((s: any) => {
       const sid = Number(s.id);
@@ -251,8 +276,16 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
         myStatus: status,
         canJustify,
         justifyStatus: jst ?? null,
+        startDate: ymdToDate(s.session_date ?? null),
       };
     });
+
+    // Para "Resumen": próximas clases (top 3, futuras o de hoy)
+    const now = new Date();
+    const upcoming = myClasses
+      .filter((c) => c.startDate && c.startDate.getTime() >= new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime())
+      .sort((a, b) => (a.startDate!.getTime() - b.startDate!.getTime()))
+      .slice(0, 3);
 
     const tabs = [
       { key: "resumen", label: "Resumen" },
@@ -274,10 +307,71 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
 
         <TabNav tab={tab} tabs={tabs} />
 
-        {/* CONTENIDOS */}
+        {/* ========== RESUMEN (dashboard) ========== */}
         {tab === "resumen" && (
-          <section className="space-y-3">
-            <h2 className="text-lg font-medium">Mi asistencia</h2>
+          <section className="space-y-6">
+            <div>
+              <h2 className="text-lg font-medium mb-2">Mis próximas clases</h2>
+              <div className="border rounded">
+                <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
+                  <div className="col-span-4 text-black">Fecha</div>
+                  <div className="col-span-3 text-black">Hora</div>
+                  <div className="col-span-3 text-black">Materia</div>
+                  <div className="col-span-2 text-black">Salón</div>
+                </div>
+                <div>
+                  {upcoming.map((c) => (
+                    <div key={c.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm items-center">
+                      <div className="col-span-4">{c.date ?? "—"}</div>
+                      <div className="col-span-3">{c.time ?? "—"}</div>
+                      <div className="col-span-3">{c.subjectName ?? "—"}</div>
+                      <div className="col-span-2">{c.room ?? "—"}</div>
+                    </div>
+                  ))}
+                  {!upcoming.length && <div className="p-4 text-sm opacity-70">No hay clases próximas.</div>}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <a href="#" className="border rounded p-4 hover:bg-gray-50 block">
+                <div className="font-medium">Mis Trámites</div>
+                <div className="text-sm opacity-70">Próximamente…</div>
+              </a>
+              <a href="#" className="border rounded p-4 hover:bg-gray-50 block">
+                <div className="font-medium">Buzón de Atención Anónima</div>
+                <div className="text-sm opacity-70">Próximamente…</div>
+              </a>
+            </div>
+          </section>
+        )}
+
+        {/* ========== MATERIAS (con Calificación Final) ========== */}
+        {tab === "materias" && (
+          <section className="space-y-2">
+            <h2 className="text-lg font-medium">Mis materias</h2>
+            <div className="border rounded">
+              <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
+                <div className="col-span-8 text-black">Materia</div>
+                <div className="col-span-4 text-black">Calificación Final</div>
+              </div>
+              <div>
+                {mySubjectRows.map((row) => (
+                  <div key={row.groupId} className="grid grid-cols-12 border-t px-3 py-2 text-sm items-center">
+                    <div className="col-span-8">{row.subjectName ?? "—"}</div>
+                    <div className="col-span-4">{row.finalGrade ?? "—"}</div>
+                  </div>
+                ))}
+                {!mySubjectRows.length && <div className="p-4 text-sm opacity-70">Sin materias.</div>}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* ========== CLASES (tabla de asistencia + justificar) ========== */}
+        {tab === "clases" && (
+          <section className="space-y-2">
+            <h2 className="text-lg font-medium">Mis clases</h2>
             <div className="border rounded">
               <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
                 <div className="col-span-3 text-black">Fecha</div>
@@ -323,60 +417,13 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
                     </div>
                   </div>
                 ))}
-                {!myClasses.length && <div className="p-4 text-sm opacity-70">Sin sesiones o sin asistencia registrada.</div>}
-              </div>
-            </div>
-          </section>
-        )}
-
-        {tab === "materias" && (
-          <section className="space-y-2">
-            <h2 className="text-lg font-medium">Mis materias</h2>
-            <div className="border rounded">
-              <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
-                <div className="col-span-8 text-black">Materia</div>
-                <div className="col-span-4 text-black">Acciones</div>
-              </div>
-              <div>
-                {mySubjects.map((s: any) => (
-                  <div key={s.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm items-center">
-                    <div className="col-span-8">{s.name ?? "—"}</div>
-                    <div className="col-span-4"><span className="text-xs opacity-60">—</span></div>
-                  </div>
-                ))}
-                {!mySubjects.length && <div className="p-4 text-sm opacity-70">Sin materias.</div>}
-              </div>
-            </div>
-          </section>
-        )}
-
-        {tab === "clases" && (
-          <section className="space-y-2">
-            <h2 className="text-lg font-medium">Mis clases</h2>
-            <div className="border rounded">
-              <div className="grid grid-cols-12 bg-gray-50 px-3 py-2 text-sm font-medium">
-                <div className="col-span-3 text-black">Fecha</div>
-                <div className="col-span-2 text-black">Hora</div>
-                <div className="col-span-3 text-black">Materia</div>
-                <div className="col-span-2 text-black">Salón</div>
-                <div className="col-span-2 text-black">Mi estado</div>
-              </div>
-              <div>
-                {myClasses.map((c) => (
-                  <div key={c.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm items-center">
-                    <div className="col-span-3">{c.date ?? "—"}</div>
-                    <div className="col-span-2">{c.time ?? "—"}</div>
-                    <div className="col-span-3">{c.subjectName ?? "—"}</div>
-                    <div className="col-span-2">{c.room ?? "—"}</div>
-                    <div className="col-span-2">{c.myStatus}</div>
-                  </div>
-                ))}
                 {!myClasses.length && <div className="p-4 text-sm opacity-70">Sin clases.</div>}
               </div>
             </div>
           </section>
         )}
 
+        {/* ========== GRUPOS ========== */}
         {tab === "grupos" && (
           <section className="space-y-2">
             <h2 className="text-lg font-medium">Mis grupos</h2>
@@ -403,7 +450,7 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
     );
   }
 
-  /** ========================= DOCENTE ========================= */
+  /** ========================= DOCENTE (igual que antes) ========================= */
   if (role === "docente") {
     const { data: tp } = await supabase
       .from("teacher_profile")
@@ -428,7 +475,6 @@ export default async function ProfilePage({ searchParams }: { searchParams?: { t
       (subs ?? []).forEach((s: any) => subjMap.set(s.id, s.name ?? ""));
     }
 
-    // Mis grupos (vía Group.teacher_user_id)
     const { data: tGroups } = await supabase
       .from("Group")
       .select("id, code, subjectId, termId")
