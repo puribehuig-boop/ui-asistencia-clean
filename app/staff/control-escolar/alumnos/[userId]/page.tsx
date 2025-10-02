@@ -1,8 +1,25 @@
 // app/staff/control-escolar/alumnos/[userId]/page.tsx
+import Link from "next/link";
 import { supabaseAdmin } from "@/lib/supabase/adminClient";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+
+const REQUIRED_DOCS: { value: string; label: string }[] = [
+  { value: "cert_bach", label: "Certificado de Bachillerato" },
+  { value: "curp", label: "CURP" },
+  { value: "ficha_inscripcion", label: "Ficha de Inscripción" },
+  { value: "acta_nacimiento", label: "Acta de Nacimiento" },
+  { value: "copia_titulo", label: "Copia de Título" },
+];
+
+const DOC_LABELS: Record<string, string> = REQUIRED_DOCS.reduce((acc, d) => {
+  acc[d.value] = d.label;
+  return acc;
+}, {} as Record<string, string>);
+
+export default async function AlumnoDetallePage({ params }: { params: { userId: string } }) {
+  const supabase = createSupabaseServerClient();
 
 function hhmm(t?: string | null) {
   if (!t) return "—";
@@ -14,6 +31,77 @@ function hhmm(t?: string | null) {
 export default async function StudentDetailPage({ params }: { params: { userId: string } }) {
   const userId = params.userId;
 
+// Guard SSR (solo admin/staff/control_escolar)
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth?.user) {
+    return (
+      <div className="p-6">
+        <p>Necesitas iniciar sesión.</p>
+        <a href="/login" className="underline">Ir a login</a>
+      </div>
+    );
+  }
+  const { data: me } = await supabase.from("profiles").select("role").eq("user_id", auth.user.id).maybeSingle();
+  const role = (me?.role ?? "").toLowerCase();
+  if (!["admin", "control_escolar", "staff"].includes(role)) {
+    return (
+      <div className="p-6">
+        <p>No tienes acceso.</p>
+        <a className="underline" href="/profile">Volver</a>
+      </div>
+    );
+  }
+
+  // Resolver alumno por userId (uuid) o por id numérico
+  let student: { id: number; fullName?: string | null; userId?: string | null } | null = null;
+
+  // Primero intenta por UUID en StudentProfile.userId
+  const byUser = await supabase
+    .from("StudentProfile")
+    .select('id, "fullName", "userId"')
+    .eq("userId", params.userId)
+    .maybeSingle();
+
+  if (byUser?.data) {
+    student = byUser.data as any;
+  } else if (/^\d+$/.test(params.userId)) {
+    // Si no, intenta por id numérico
+    const byId = await supabase
+      .from("StudentProfile")
+      .select('id, "fullName", "userId"')
+      .eq("id", Number(params.userId))
+      .maybeSingle();
+    student = (byId?.data as any) ?? null;
+  }
+
+  if (!student) {
+    return <div className="p-6">Alumno no encontrado.</div>;
+  }
+
+  // Documentos cargados
+  const { data: docs } = await supabase
+    .from("student_documents")
+    .select("id, doc_type, storage_path, original_name, status, updated_at, created_at, size_bytes, mime_type")
+    .eq("student_id", student.id);
+
+  const docsByType = new Map<string, any>();
+  (docs ?? []).forEach((d) => docsByType.set(d.doc_type, d));
+
+  // URLs firmadas para ver/descargar (si hay archivo)
+  const urlMap: Record<number, string | undefined> = {};
+  for (const d of docs ?? []) {
+    const objectPath = d.storage_path.replace(/^student-docs\//, "");
+    const { data: signed } = await supabase.storage.from("student-docs").createSignedUrl(objectPath, 300);
+    urlMap[d.id] = signed?.signedUrl;
+  }
+
+  // Faltantes
+  const missing = REQUIRED_DOCS.filter((r) => !docsByType.has(r.value));
+
+  // Ruta para "Cargar o editar documentos"
+  const slug = student.userId ?? String(student.id);
+  const editHref = `/staff/control-escolar/alumnos/${slug}/documentos`;
+  
   // Perfil y nombre
   const [{ data: prof }, { data: sp }] = await Promise.all([
     supabaseAdmin.from("profiles").select("email, role").eq("user_id", userId).maybeSingle(),
@@ -114,14 +202,75 @@ export default async function StudentDetailPage({ params }: { params: { userId: 
         <a href="#asistencia" className="px-2 py-1 rounded border">Asistencia</a>
       </div>
 
-      {/* Información y documentos */}
-      <section id="info" className="space-y-3">
-        <h2 className="font-medium">Información y documentos</h2>
-        <div className="border rounded p-3">
-          <div className="text-sm">Nombre: <b>{name}</b></div>
-          <div className="text-sm">Correo: <b>{prof?.email ?? "—"}</b></div>
-          <div className="text-xs opacity-60 mt-2">
-            Documentos: <i>(placeholder)</i>. Aquí podrás listar comprobantes, constancias, etc.
+      {/* Sección: Información y documentos */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-medium">Documentación</h2>
+          <Link href={editHref} className="px-3 py-1 border rounded text-sm hover:bg-gray-50">
+            Cargar o editar documentos
+          </Link>
+        </div>
+
+        {/* Documentos cargados */}
+        <div className="border rounded">
+          <div className="grid grid-cols-12 px-3 py-2 bg-gray-50 text-sm font-medium">
+            <div className="col-span-4 text-black">Documento</div>
+            <div className="col-span-4 text-black">Archivo</div>
+            <div className="col-span-2 text-black">Estatus</div>
+            <div className="col-span-2 text-black">Acciones</div>
+          </div>
+          <div>
+            {(docs ?? []).length ? (
+              (docs ?? []).map((d) => (
+                <div key={d.id} className="grid grid-cols-12 px-3 py-2 border-t text-sm items-center">
+                  <div className="col-span-4">{DOC_LABELS[d.doc_type] ?? d.doc_type}</div>
+                  <div className="col-span-4">{d.original_name ?? "—"}</div>
+                  <div className="col-span-2">
+                    <span
+                      className="px-2 py-0.5 rounded text-white text-xs"
+                      style={{
+                        background:
+                          d.status === "verified" ? "#16a34a" :
+                          d.status === "rejected" ? "#dc2626" : "#6b7280",
+                      }}
+                    >
+                      {d.status}
+                    </span>
+                  </div>
+                  <div className="col-span-2">
+                    {(() => {
+                      const u = urlMap[d.id];
+                      return u ? (
+                        <a href={u} target="_blank" rel="noreferrer" className="text-xs underline">
+                          Ver
+                        </a>
+                      ) : <span className="text-xs opacity-60">—</span>;
+                    })()}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="p-4 text-sm opacity-70">Sin documentos cargados.</div>
+            )}
+          </div>
+        </div>
+
+        {/* Documentos faltantes */}
+        <div className="border rounded">
+          <div className="px-3 py-2 bg-gray-50 text-sm font-medium text-black">Documentos faltantes</div>
+          <div>
+            {missing.length ? (
+              missing.map((m) => (
+                <div key={m.value} className="px-3 py-2 border-t text-sm flex items-center justify-between">
+                  <span>{m.label}</span>
+                  <span className="px-2 py-0.5 rounded text-white text-xs" style={{ background: "#dc2626" }}>
+                    Falta
+                  </span>
+                </div>
+              ))
+            ) : (
+              <div className="p-4 text-sm opacity-70">No faltan documentos requeridos.</div>
+            )}
           </div>
         </div>
       </section>
