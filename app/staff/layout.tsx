@@ -20,6 +20,11 @@ export default async function StaffLayout({ children }: { children: React.ReactN
     .eq("user_id", auth.user.id)
     .maybeSingle();
 
+  const { count: pendingJustifs } = await supabase
+    .from("attendance_justifications")
+    .select("*", { count: "exact", head: true })
+    .eq("status", "pending");
+
   if (!me?.role || !STAFF_ROLES.includes(me.role)) {
     redirect("/profile");
   }
@@ -45,6 +50,17 @@ export default async function StaffLayout({ children }: { children: React.ReactN
               <Link href="/staff/control-escolar/alumnos" className="block px-2 py-1 rounded hover:bg-gray-50">Alumnos</Link>
               <Link href="/staff/control-escolar/profesores" className="block px-2 py-1 rounded hover:bg-gray-50">Profesores</Link>
               <Link href="/staff/control-escolar/tramites" className="block px-2 py-1 rounded hover:bg-gray-50">Trámites</Link>
+              <Link
+                href="/staff/control-escolar/justificaciones"
+                className="px-2 py-1 rounded hover:bg-gray-50 flex items-center justify-between"
+              >
+                <span>Justificaciones</span>
+                {typeof pendingJustifs === "number" && pendingJustifs > 0 && (
+                  <span className="ml-2 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full text-xs font-medium bg-red-600 text-white">
+                    {pendingJustifs}
+                  </span>
+                )}
+              </Link>
             </div>
           </details>
 
