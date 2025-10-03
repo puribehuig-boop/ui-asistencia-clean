@@ -1,6 +1,7 @@
 // app/staff/admissions/prospects/[id]/page.tsx
 import Link from "next/link";
 import { createSupabaseServerClient } from "@/lib/supabase/serverClient";
+import AssignOwnerForm from "./AssignOwnerForm";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -23,9 +24,13 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
 
   // Guard
   const { data: auth } = await supabase.auth.getUser();
-  const { data: me } = await supabase.from("profiles").select("role,email,user_id").eq("user_id", auth?.user?.id ?? "").maybeSingle();
+  const { data: me } = await supabase
+    .from("profiles")
+    .select("role,email,user_id")
+    .eq("user_id", auth?.user?.id ?? "")
+    .maybeSingle();
   const role = (me?.role ?? "").toLowerCase();
-  if (!["admin","admissions"].includes(role)) return <div className="p-6">No tienes acceso.</div>;
+  if (!["admin", "admissions"].includes(role)) return <div className="p-6">No tienes acceso.</div>;
 
   const prospectId = Number(params.id || 0);
   if (!prospectId) return <div className="p-6">ID inválido.</div>;
@@ -33,22 +38,37 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
   // Prospecto
   const { data: prospect } = await supabase
     .from("prospects")
-    .select(`id, full_name, email, phone, source, campaign, stage, owner_user_id, term_id, created_at, updated_at, last_contact_at`)
+    .select(
+      `id, full_name, email, phone, source, campaign, stage,
+       owner_user_id, term_id, created_at, updated_at, last_contact_at`
+    )
     .eq("id", prospectId)
     .maybeSingle();
   if (!prospect) return <div className="p-6">Prospecto no encontrado.</div>;
 
-  // Owner y catálogo de terms y staff para reasignar
+  // Owner, terms y staff para asignar
   const [{ data: owner }, { data: terms }, { data: staff }] = await Promise.all([
-    prospect.owner_user_id ? supabase.from("profiles").select("email,user_id").eq("user_id", prospect.owner_user_id).maybeSingle() : Promise.resolve({ data: null } as any),
+    prospect.owner_user_id
+      ? supabase.from("profiles").select("email,user_id").eq("user_id", prospect.owner_user_id).maybeSingle()
+      : Promise.resolve({ data: null } as any),
     supabase.from("Term").select("id,name").order("id", { ascending: false }),
     supabase.from("profiles").select("user_id,email,role").in("role", ["admin","admissions"]).order("email", { ascending: true }),
   ]);
 
-  // Interacciones y tareas (lo ya existente)
+  // Interacciones y tareas
   const [{ data: interactions }, { data: tasks }] = await Promise.all([
-    supabase.from("prospect_interactions").select(`id, type, note, happened_at, user_id`).eq("prospect_id", prospectId).order("happened_at", { ascending: false }).limit(200),
-    supabase.from("prospect_tasks").select(`id, title, due_at, status, user_id, created_at`).eq("prospect_id", prospectId).order("due_at", { ascending: true }).limit(200),
+    supabase
+      .from("prospect_interactions")
+      .select(`id, type, note, happened_at, user_id`)
+      .eq("prospect_id", prospectId)
+      .order("happened_at", { ascending: false })
+      .limit(200),
+    supabase
+      .from("prospect_tasks")
+      .select(`id, title, due_at, status, user_id, created_at`)
+      .eq("prospect_id", prospectId)
+      .order("due_at", { ascending: true })
+      .limit(200),
   ]);
 
   const sla = slaBadge(prospect.last_contact_at, prospect.created_at);
@@ -60,7 +80,8 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
         <div>
           <h1 className="text-xl font-semibold">Prospecto · {prospect.full_name}</h1>
           <div className="text-sm opacity-70">
-            #{prospect.id} · {prospect.email ?? "—"}{prospect.phone ? ` · ${prospect.phone}` : ""}
+            #{prospect.id} · {prospect.email ?? "—"}
+            {prospect.phone ? ` · ${prospect.phone}` : ""}
           </div>
         </div>
         <div className="flex gap-3">
@@ -82,20 +103,6 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
             <div className="opacity-60 text-xs">Propietario</div>
             <div className="flex items-center gap-2">
               <span>{owner?.email ?? "Sin asignar"}</span>
-              {/* Botón tomar lead */}
-              {!prospect.owner_user_id && (
-                <form
-                  action={`/api/staff/admissions/prospects/${prospectId}/assign`}
-                  method="post"
-                  className="inline"
-                >
-                  <input type="hidden" name="json" value="1" />
-                  {/* usamos fetch desde client, pero por seguridad dejamos un backup “action” con JS en la página o un pequeño client script */}
-                </form>
-              )}
-            </div>
-            <div className="text-xs opacity-60">
-              Puedes <b>Tomar lead</b> o asignarlo a un asesor.
             </div>
           </div>
 
@@ -116,32 +123,46 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
           </div>
         </div>
 
-        {/* Asignación / Reasignación */}
-        <AssignOwnerForm prospectId={prospectId} currentOwner={prospect.owner_user_id} staff={staff ?? []} meId={me?.user_id ?? ""} />
+        <AssignOwnerForm
+          prospectId={prospectId}
+          currentOwner={prospect.owner_user_id}
+          staff={(staff ?? []).map((s: any) => ({ user_id: s.user_id, email: s.email }))}
+          meId={me?.user_id ?? ""}
+        />
       </section>
 
-      {/* Form: Origen/Campaña/Periodo (igual que antes) */}
+      {/* Origen/Campaña/Periodo */}
       <section className="border rounded p-3 space-y-3">
-        <form action={`/api/staff/admissions/prospects/${prospectId}/update`} method="post" className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+        <form
+          action={`/api/staff/admissions/prospects/${prospectId}/update`}
+          method="post"
+          className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm"
+        >
           <div>
             <div className="opacity-60 text-xs">Origen</div>
             <select name="source" defaultValue={prospect.source ?? ""} className="w-full border rounded px-2 py-1">
               <option value="">—</option>
-              {SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
+              {SOURCES.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
             </select>
           </div>
           <div>
             <div className="opacity-60 text-xs">Campaña</div>
             <select name="campaign" defaultValue={prospect.campaign ?? ""} className="w-full border rounded px-2 py-1">
               <option value="">—</option>
-              {CAMPAIGNS.map(c => <option key={c} value={c}>{c}</option>)}
+              {CAMPAIGNS.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
             </select>
           </div>
           <div>
             <div className="opacity-60 text-xs">Ciclo / Periodo</div>
             <select name="term_id" defaultValue={prospect.term_id ?? ""} className="w-full border rounded px-2 py-1">
               <option value="">—</option>
-              {(terms ?? []).map(t => <option key={t.id} value={t.id}>{t.name ?? `Term #${t.id}`}</option>)}
+              {(terms ?? []).map((t: any) => (
+                <option key={t.id} value={t.id}>{t.name ?? `Term #${t.id}`}</option>
+              ))}
             </select>
           </div>
           <div className="flex items-end">
@@ -150,11 +171,15 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
         </form>
       </section>
 
-      {/* Interacciones (igual que antes) */}
+      {/* Interacciones */}
       <section className="space-y-2">
         <h2 className="font-medium">Interacciones</h2>
 
-        <form action={`/api/staff/admissions/prospects/${prospectId}/interactions/add`} method="post" className="border rounded p-3 text-sm space-y-2">
+        <form
+          action={`/api/staff/admissions/prospects/${prospectId}/interactions/add`}
+          method="post"
+          className="border rounded p-3 text-sm space-y-2"
+        >
           <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
             <div>
               <div className="opacity-60 text-xs">Tipo</div>
@@ -190,7 +215,7 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
             <div className="col-span-2 text-black">Responsable</div>
           </div>
           <div>
-            {(interactions ?? []).map((it) => (
+            {(interactions ?? []).map((it: any) => (
               <div key={it.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm">
                 <div className="col-span-2">{new Date(it.happened_at).toLocaleString()}</div>
                 <div className="col-span-2 capitalize">{it.type}</div>
@@ -198,7 +223,9 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
                 <div className="col-span-2">{it.user_id ?? "—"}</div>
               </div>
             ))}
-            {(!interactions || !interactions.length) && <div className="p-4 text-sm opacity-70">Sin interacciones.</div>}
+            {(!interactions || !interactions.length) && (
+              <div className="p-4 text-sm opacity-70">Sin interacciones.</div>
+            )}
           </div>
         </div>
       </section>
@@ -217,7 +244,7 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
             <div className="col-span-2 text-black">Responsable</div>
           </div>
           <div>
-            {(tasks ?? []).map((t) => (
+            {(tasks ?? []).map((t: any) => (
               <div key={t.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm">
                 <div className="col-span-6">{t.title}</div>
                 <div className="col-span-2">{t.due_at ? new Date(t.due_at).toLocaleString() : "—"}</div>
@@ -225,60 +252,12 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
                 <div className="col-span-2">{t.user_id ?? "—"}</div>
               </div>
             ))}
-            {(!tasks || !tasks.length) && <div className="p-4 text-sm opacity-70">Sin tareas.</div>}
+            {(!tasks || !tasks.length) && (
+              <div className="p-4 text-sm opacity-70">Sin tareas.</div>
+            )}
           </div>
         </div>
       </section>
     </div>
-  );
-}
-
-/** CLIENT COMPONENT INLINE (pequeño) */
-function AssignOwnerForm({ prospectId, currentOwner, staff, meId }: { prospectId: number; currentOwner: string | null; staff: any[]; meId: string }) {
-  return (
-    <form
-      className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm"
-      onSubmit={async (e) => {
-        e.preventDefault();
-        const form = e.currentTarget as HTMLFormElement;
-        const sel = (form.querySelector('select[name="owner"]') as HTMLSelectElement);
-        const val = sel.value;
-        const mode = val === "__me__" ? "take" : (val === "__none__" ? "unassign" : "assign");
-        const payload: any = { mode };
-        if (mode === "assign") payload.owner_user_id = val;
-
-        const res = await fetch(`/api/staff/admissions/prospects/${prospectId}/assign`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (!res.ok) {
-          const j = await res.json().catch(() => ({}));
-          alert(j?.error ?? "Error asignando");
-        } else {
-          location.reload();
-        }
-      }}
-    >
-      <div>
-        <div className="opacity-60 text-xs">Asignar a</div>
-        <select name="owner" className="w-full border rounded px-2 py-1" defaultValue="">
-          <option value="">— seleccionar —</option>
-          {!currentOwner && <option value="__me__">Tomar yo</option>}
-          {currentOwner && currentOwner !== meId && <option value="__me__">Reasignar a mí</option>}
-          <option value="__none__">Liberar (sin asignar)</option>
-          <optgroup label="Asesores">
-            {(staff ?? []).map((s: any) => (
-              <option key={s.user_id} value={s.user_id}>
-                {s.email} {s.user_id === currentOwner ? " (actual)" : ""}
-              </option>
-            ))}
-          </optgroup>
-        </select>
-      </div>
-      <div className="flex items-end">
-        <button className="px-3 py-1 border rounded">Guardar asignación</button>
-      </div>
-    </form>
   );
 }
