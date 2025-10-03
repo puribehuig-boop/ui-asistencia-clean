@@ -7,6 +7,9 @@ type Prospect = {
   email: string | null;
   phone: string | null;
   stage: string;
+  owner_user_id?: string | null;
+  last_contact_at?: string | null;
+  created_at?: string;
 };
 
 const STAGES: { key: string; label: string }[] = [
@@ -18,6 +21,16 @@ const STAGES: { key: string; label: string }[] = [
   { key: "inscrito",     label: "Inscrito" },
   { key: "descartado",   label: "Descartado" },
 ];
+
+function slaColor(p: Prospect) {
+  const base = p.last_contact_at ?? p.created_at ?? null;
+  if (!base) return "#6b7280"; // gris
+  const diffMs = Date.now() - new Date(base).getTime();
+  const diffH = diffMs / 3_600_000;
+  if (diffH <= 24) return "#16a34a";    // verde
+  if (diffH <= 48) return "#ca8a04";    // ámbar
+  return "#dc2626";                     // rojo
+}
 
 export default function KanbanBoard({ initial }: { initial: Record<string, Prospect[]> }) {
   const [cols, setCols] = useState<Record<string, Prospect[]>>(initial);
@@ -31,10 +44,9 @@ export default function KanbanBoard({ initial }: { initial: Record<string, Prosp
     const data = e.dataTransfer.getData("text/plain");
     if (!data) return;
     const parsed = JSON.parse(data) as { id: number; from: string };
-
     if (parsed.from === toStage) return;
 
-    // Optimista en UI
+    // Optimista
     setCols(prev => {
       const next = { ...prev };
       const fromArr = [...(next[parsed.from] ?? [])];
@@ -48,19 +60,36 @@ export default function KanbanBoard({ initial }: { initial: Record<string, Prosp
       return next;
     });
 
-    // Persistir en API
-    try {
-      const resp = await fetch("/api/staff/admissions/prospects/move", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: parsed.id, stage: toStage }),
+    // Persistir
+    const resp = await fetch("/api/staff/admissions/prospects/move", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: parsed.id, stage: toStage }),
+    });
+    if (!resp.ok) {
+      const j = await resp.json().catch(() => ({}));
+      alert("Error moviendo: " + (j?.error ?? resp.statusText));
+    }
+  }
+
+  async function takeLead(id: number) {
+    const resp = await fetch(`/api/staff/admissions/prospects/${id}/assign`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "take" }),
+    });
+    if (!resp.ok) {
+      const j = await resp.json().catch(() => ({}));
+      alert("Error asignando: " + (j?.error ?? resp.statusText));
+    } else {
+      // Refresco optimista: marcamos como asignado (owner_user_id != null)
+      setCols(prev => {
+        const next: Record<string, Prospect[]> = {};
+        for (const k of Object.keys(prev)) {
+          next[k] = prev[k].map(p => p.id === id ? { ...p, owner_user_id: "me" } : p);
+        }
+        return next;
       });
-      if (!resp.ok) {
-        const j = await resp.json().catch(() => ({}));
-        alert("Error moviendo: " + (j?.error ?? resp.statusText));
-      }
-    } catch (err: any) {
-      alert("Error de red: " + (err?.message || String(err)));
     }
   }
 
@@ -84,13 +113,26 @@ export default function KanbanBoard({ initial }: { initial: Record<string, Prosp
                 key={card.id}
                 draggable
                 onDragStart={(e) => onDragStart(e, card)}
-                className="bg-white border rounded p-2 shadow-sm cursor-move"
+                className="bg-white border rounded p-2 shadow-sm"
               >
-                <div className="font-medium text-sm">{card.full_name}</div>
+                <div className="flex items-center justify-between">
+                  <div className="font-medium text-sm">{card.full_name}</div>
+                  <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: slaColor(card) }} />
+                </div>
                 <div className="text-xs opacity-70">
                   {card.email ?? "—"} {card.phone ? `· ${card.phone}` : ""}
                 </div>
-                <a href={`/staff/admissions/prospects/${card.id}`} className="text-xs underline">Abrir</a>
+                <div className="flex items-center gap-2 mt-1">
+                  <a href={`/staff/admissions/prospects/${card.id}`} className="text-xs underline">Abrir</a>
+                  {!card.owner_user_id && (
+                    <button
+                      onClick={() => takeLead(card.id)}
+                      className="text-xs border rounded px-2 py-0.5"
+                    >
+                      Tomar lead
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
