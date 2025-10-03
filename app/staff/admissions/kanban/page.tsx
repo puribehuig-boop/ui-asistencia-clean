@@ -7,17 +7,15 @@ export const revalidate = 0;
 export default async function KanbanPage() {
   const supabase = createSupabaseServerClient();
 
-  // Guard SSR (admin/admissions)
+  // Guard
   const { data: auth } = await supabase.auth.getUser();
   const { data: me } = await supabase.from("profiles").select("role").eq("user_id", auth?.user?.id ?? "").maybeSingle();
   const role = (me?.role ?? "").toLowerCase();
-  if (!["admin","admissions"].includes(role)) {
-    return <div className="p-6">No tienes acceso.</div>;
-  }
+  if (!["admin","admissions"].includes(role)) return <div className="p-6">No tienes acceso.</div>;
 
   const { data: rows } = await supabase
     .from("prospects")
-    .select("id, full_name, email, phone, stage")
+    .select("id, full_name, email, phone, stage, owner_user_id, last_contact_at, created_at")
     .order("updated_at", { ascending: false })
     .limit(500);
 
