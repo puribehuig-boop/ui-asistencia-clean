@@ -8,81 +8,50 @@ export const revalidate = 0;
 const SOURCES = ["Web", "Facebook", "Referido", "WhatsApp", "Evento", "Otro"];
 const CAMPAIGNS = ["Landing 2025", "Campaña Otoño", "Campaña Primavera", "Orgánico", "Sin campaña"];
 
-export default async function ProspectDetailPage({
-  params,
-}: {
-  params: { id: string };
-}) {
+function slaBadge(ts?: string | null, fallback?: string | null) {
+  const base = ts ?? fallback;
+  if (!base) return { label: "SLA: sin contacto", color: "#6b7280" }; // gris
+  const diffMs = Date.now() - new Date(base).getTime();
+  const diffH = diffMs / 3_600_000;
+  if (diffH <= 24) return { label: "SLA: <24h", color: "#16a34a" }; // verde
+  if (diffH <= 48) return { label: "SLA: 24–48h", color: "#ca8a04" }; // ámbar
+  return { label: "SLA: >48h", color: "#dc2626" }; // rojo
+}
+
+export default async function ProspectDetailPage({ params }: { params: { id: string } }) {
   const supabase = createSupabaseServerClient();
 
-  // Guard SSR (admin/admissions)
+  // Guard
   const { data: auth } = await supabase.auth.getUser();
-  const { data: me } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("user_id", auth?.user?.id ?? "")
-    .maybeSingle();
+  const { data: me } = await supabase.from("profiles").select("role,email,user_id").eq("user_id", auth?.user?.id ?? "").maybeSingle();
   const role = (me?.role ?? "").toLowerCase();
-  if (!["admin", "admissions"].includes(role)) {
-    return <div className="p-6">No tienes acceso.</div>;
-  }
+  if (!["admin","admissions"].includes(role)) return <div className="p-6">No tienes acceso.</div>;
 
   const prospectId = Number(params.id || 0);
-  if (!prospectId) {
-    return <div className="p-6">ID inválido.</div>;
-  }
+  if (!prospectId) return <div className="p-6">ID inválido.</div>;
 
   // Prospecto
   const { data: prospect } = await supabase
     .from("prospects")
-    .select(`
-      id, full_name, email, phone, source, campaign, stage,
-      owner_user_id, term_id, created_at, updated_at, last_contact_at
-    `)
+    .select(`id, full_name, email, phone, source, campaign, stage, owner_user_id, term_id, created_at, updated_at, last_contact_at`)
     .eq("id", prospectId)
     .maybeSingle();
+  if (!prospect) return <div className="p-6">Prospecto no encontrado.</div>;
 
-  if (!prospect) {
-    return (
-      <div className="p-6">
-        Prospecto no encontrado.{" "}
-        <Link href="/staff/admissions/prospects" className="underline">
-          Volver a la lista
-        </Link>
-      </div>
-    );
-  }
-
-  // Datos auxiliares
-  const [{ data: owner }, { data: term }, { data: terms }] = await Promise.all([
-    prospect.owner_user_id
-      ? supabase
-          .from("profiles")
-          .select("email")
-          .eq("user_id", prospect.owner_user_id)
-          .maybeSingle()
-      : Promise.resolve({ data: null } as any),
-    prospect.term_id
-      ? supabase.from("Term").select("id, name").eq("id", prospect.term_id).maybeSingle()
-      : Promise.resolve({ data: null } as any),
-    supabase.from("Term").select("id, name").order("id", { ascending: false }),
+  // Owner y catálogo de terms y staff para reasignar
+  const [{ data: owner }, { data: terms }, { data: staff }] = await Promise.all([
+    prospect.owner_user_id ? supabase.from("profiles").select("email,user_id").eq("user_id", prospect.owner_user_id).maybeSingle() : Promise.resolve({ data: null } as any),
+    supabase.from("Term").select("id,name").order("id", { ascending: false }),
+    supabase.from("profiles").select("user_id,email,role").in("role", ["admin","admissions"]).order("email", { ascending: true }),
   ]);
 
-  // Interacciones y tareas (solo lectura aquí; alta via form abajo)
+  // Interacciones y tareas (lo ya existente)
   const [{ data: interactions }, { data: tasks }] = await Promise.all([
-    supabase
-      .from("prospect_interactions")
-      .select(`id, type, note, happened_at, user_id`)
-      .eq("prospect_id", prospectId)
-      .order("happened_at", { ascending: false })
-      .limit(200),
-    supabase
-      .from("prospect_tasks")
-      .select(`id, title, due_at, status, user_id, created_at`)
-      .eq("prospect_id", prospectId)
-      .order("due_at", { ascending: true })
-      .limit(200),
+    supabase.from("prospect_interactions").select(`id, type, note, happened_at, user_id`).eq("prospect_id", prospectId).order("happened_at", { ascending: false }).limit(200),
+    supabase.from("prospect_tasks").select(`id, title, due_at, status, user_id, created_at`).eq("prospect_id", prospectId).order("due_at", { ascending: true }).limit(200),
   ]);
+
+  const sla = slaBadge(prospect.last_contact_at, prospect.created_at);
 
   return (
     <div className="space-y-6">
@@ -100,35 +69,60 @@ export default async function ProspectDetailPage({
         </div>
       </div>
 
-      {/* Datos y edición rápida */}
+      {/* Datos + SLA + Asignación */}
       <section className="border rounded p-3 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm items-start">
           <div>
             <div className="opacity-60 text-xs">Etapa</div>
             <div className="font-medium capitalize">{prospect.stage}</div>
-            <div className="text-xs opacity-60">Para cambiar etapa usa el Kanban.</div>
+            <div className="text-xs opacity-60">Cámbiala desde el Kanban (por ahora).</div>
           </div>
+
           <div>
             <div className="opacity-60 text-xs">Propietario</div>
-            <div>{owner?.email ?? "Sin asignar"}</div>
+            <div className="flex items-center gap-2">
+              <span>{owner?.email ?? "Sin asignar"}</span>
+              {/* Botón tomar lead */}
+              {!prospect.owner_user_id && (
+                <form
+                  action={`/api/staff/admissions/prospects/${prospectId}/assign`}
+                  method="post"
+                  className="inline"
+                >
+                  <input type="hidden" name="json" value="1" />
+                  {/* usamos fetch desde client, pero por seguridad dejamos un backup “action” con JS en la página o un pequeño client script */}
+                </form>
+              )}
+            </div>
+            <div className="text-xs opacity-60">
+              Puedes <b>Tomar lead</b> o asignarlo a un asesor.
+            </div>
           </div>
+
+          <div>
+            <div className="opacity-60 text-xs">SLA</div>
+            <div className="flex items-center gap-2">
+              <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: sla.color }} />
+              <span>{sla.label}</span>
+            </div>
+            <div className="text-xs opacity-60">
+              Se calcula con base en <b>Último contacto</b> o fecha de creación si no hay contacto.
+            </div>
+          </div>
+
           <div>
             <div className="opacity-60 text-xs">Último contacto</div>
             <div>{prospect.last_contact_at ? new Date(prospect.last_contact_at).toLocaleString() : "—"}</div>
-            <div className="text-xs opacity-60">Se actualiza automáticamente al registrar una interacción.</div>
-          </div>
-          <div>
-            <div className="opacity-60 text-xs">Creado</div>
-            <div>{new Date(prospect.created_at).toLocaleString()}</div>
           </div>
         </div>
 
-        {/* Form: Origen/Campaña/Periodo */}
-        <form
-          action={`/api/staff/admissions/prospects/${prospectId}/update`}
-          method="post"
-          className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm"
-        >
+        {/* Asignación / Reasignación */}
+        <AssignOwnerForm prospectId={prospectId} currentOwner={prospect.owner_user_id} staff={staff ?? []} meId={me?.user_id ?? ""} />
+      </section>
+
+      {/* Form: Origen/Campaña/Periodo (igual que antes) */}
+      <section className="border rounded p-3 space-y-3">
+        <form action={`/api/staff/admissions/prospects/${prospectId}/update`} method="post" className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
           <div>
             <div className="opacity-60 text-xs">Origen</div>
             <select name="source" defaultValue={prospect.source ?? ""} className="w-full border rounded px-2 py-1">
@@ -147,9 +141,7 @@ export default async function ProspectDetailPage({
             <div className="opacity-60 text-xs">Ciclo / Periodo</div>
             <select name="term_id" defaultValue={prospect.term_id ?? ""} className="w-full border rounded px-2 py-1">
               <option value="">—</option>
-              {(terms ?? []).map(t => (
-                <option key={t.id} value={t.id}>{t.name ?? `Term #${t.id}`}</option>
-              ))}
+              {(terms ?? []).map(t => <option key={t.id} value={t.id}>{t.name ?? `Term #${t.id}`}</option>)}
             </select>
           </div>
           <div className="flex items-end">
@@ -158,18 +150,11 @@ export default async function ProspectDetailPage({
         </form>
       </section>
 
-      {/* Interacciones */}
+      {/* Interacciones (igual que antes) */}
       <section className="space-y-2">
-        <div className="flex items-center justify-between">
-          <h2 className="font-medium">Interacciones</h2>
-        </div>
+        <h2 className="font-medium">Interacciones</h2>
 
-        {/* Form: nueva interacción (actualiza last_contact_at vía trigger) */}
-        <form
-          action={`/api/staff/admissions/prospects/${prospectId}/interactions/add`}
-          method="post"
-          className="border rounded p-3 text-sm space-y-2"
-        >
+        <form action={`/api/staff/admissions/prospects/${prospectId}/interactions/add`} method="post" className="border rounded p-3 text-sm space-y-2">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
             <div>
               <div className="opacity-60 text-xs">Tipo</div>
@@ -194,12 +179,9 @@ export default async function ProspectDetailPage({
           <div className="flex justify-end">
             <button className="px-3 py-1 border rounded">Agregar interacción</button>
           </div>
-          <div className="text-xs opacity-60">
-            Al guardar, se actualizará <b>Último contacto</b> automáticamente.
-          </div>
+          <div className="text-xs opacity-60">Actualiza <b>Último contacto</b> automáticamente.</div>
         </form>
 
-        {/* Lista */}
         <div className="border rounded">
           <div className="grid grid-cols-12 px-3 py-2 bg-gray-50 text-sm font-medium">
             <div className="col-span-2 text-black">Fecha</div>
@@ -216,18 +198,16 @@ export default async function ProspectDetailPage({
                 <div className="col-span-2">{it.user_id ?? "—"}</div>
               </div>
             ))}
-            {(!interactions || !interactions.length) && (
-              <div className="p-4 text-sm opacity-70">Sin interacciones.</div>
-            )}
+            {(!interactions || !interactions.length) && <div className="p-4 text-sm opacity-70">Sin interacciones.</div>}
           </div>
         </div>
       </section>
 
-      {/* Tareas (solo lectura por ahora) */}
+      {/* Tareas (solo lectura) */}
       <section className="space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="font-medium">Tareas</h2>
-          <div className="text-xs opacity-60">Creación/edición viene en la siguiente fase.</div>
+          <div className="text-xs opacity-60">CRUD llega en el siguiente paso.</div>
         </div>
         <div className="border rounded">
           <div className="grid grid-cols-12 px-3 py-2 bg-gray-50 text-sm font-medium">
@@ -245,12 +225,60 @@ export default async function ProspectDetailPage({
                 <div className="col-span-2">{t.user_id ?? "—"}</div>
               </div>
             ))}
-            {(!tasks || !tasks.length) && (
-              <div className="p-4 text-sm opacity-70">Sin tareas.</div>
-            )}
+            {(!tasks || !tasks.length) && <div className="p-4 text-sm opacity-70">Sin tareas.</div>}
           </div>
         </div>
       </section>
     </div>
+  );
+}
+
+/** CLIENT COMPONENT INLINE (pequeño) */
+function AssignOwnerForm({ prospectId, currentOwner, staff, meId }: { prospectId: number; currentOwner: string | null; staff: any[]; meId: string }) {
+  return (
+    <form
+      className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        const form = e.currentTarget as HTMLFormElement;
+        const sel = (form.querySelector('select[name="owner"]') as HTMLSelectElement);
+        const val = sel.value;
+        const mode = val === "__me__" ? "take" : (val === "__none__" ? "unassign" : "assign");
+        const payload: any = { mode };
+        if (mode === "assign") payload.owner_user_id = val;
+
+        const res = await fetch(`/api/staff/admissions/prospects/${prospectId}/assign`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          alert(j?.error ?? "Error asignando");
+        } else {
+          location.reload();
+        }
+      }}
+    >
+      <div>
+        <div className="opacity-60 text-xs">Asignar a</div>
+        <select name="owner" className="w-full border rounded px-2 py-1" defaultValue="">
+          <option value="">— seleccionar —</option>
+          {!currentOwner && <option value="__me__">Tomar yo</option>}
+          {currentOwner && currentOwner !== meId && <option value="__me__">Reasignar a mí</option>}
+          <option value="__none__">Liberar (sin asignar)</option>
+          <optgroup label="Asesores">
+            {(staff ?? []).map((s: any) => (
+              <option key={s.user_id} value={s.user_id}>
+                {s.email} {s.user_id === currentOwner ? " (actual)" : ""}
+              </option>
+            ))}
+          </optgroup>
+        </select>
+      </div>
+      <div className="flex items-end">
+        <button className="px-3 py-1 border rounded">Guardar asignación</button>
+      </div>
+    </form>
   );
 }
