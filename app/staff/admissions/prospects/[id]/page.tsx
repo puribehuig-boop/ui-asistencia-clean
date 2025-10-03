@@ -53,7 +53,7 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
       ? supabase.from("profiles").select("email,user_id").eq("user_id", prospect.owner_user_id).maybeSingle()
       : Promise.resolve({ data: null } as any),
     supabase.from("Term").select("id,name").order("id", { ascending: false }),
-    supabase.from("Program").select("id, name, code").order("name", { ascending: true }),
+    supabase.from("Program").select("id, name").order("name", { ascending: true }),
     supabase.from("profiles").select("user_id,email,role").in("role", ["admin","admissions"]).order("email", { ascending: true }),
   ]);
 
@@ -166,7 +166,7 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
               <option value="">—</option>
               {(programs ?? []).map((p: any) => (
                 <option key={p.id} value={p.id}>
-                  {p.name ?? p.code ?? `Programa #${p.id}`}
+                  {p.name ?? `Programa #${p.id}`}
                 </option>
               ))}
             </select>
