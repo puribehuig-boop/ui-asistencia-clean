@@ -4,7 +4,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/serverClient";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export async function POST(req: Request) {
+
   const supabase = createSupabaseServerClient();
   const { data: auth } = await supabase.auth.getUser();
   if (!auth?.user) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
@@ -30,4 +30,3 @@ export async function POST(req: Request) {
 
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });
-}
