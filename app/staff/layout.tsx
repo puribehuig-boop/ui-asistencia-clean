@@ -1,78 +1,50 @@
 // app/staff/layout.tsx
 import { createSupabaseServerClient } from "@/lib/supabase/serverClient";
-import { redirect } from "next/navigation";
-import Link from "next/link";
-import React from "react";
+import SidebarNav from "./SidebarNav";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const STAFF_ROLES = ["admin","staff","escolar","admisiones","caja","finanzas"];
-
 export default async function StaffLayout({ children }: { children: React.ReactNode }) {
   const supabase = createSupabaseServerClient();
-  const { data: auth } = await supabase.auth.getUser();
-  if (!auth?.user) redirect("/login");
 
+  // Guard SSR: perfiles con rol staff/admin/control_escolar/admissions
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth?.user) {
+    return (
+      <div className="p-6">
+        <p>Necesitas iniciar sesión.</p>
+        <a href="/login" className="underline">Ir a login</a>
+      </div>
+    );
+  }
   const { data: me } = await supabase
     .from("profiles")
-    .select("email, role")
+    .select("role")
     .eq("user_id", auth.user.id)
     .maybeSingle();
 
-  const { count: pendingJustifs } = await supabase
-    .from("attendance_justifications")
-    .select("*", { count: "exact", head: true })
-    .eq("status", "pending");
-
-  if (!me?.role || !STAFF_ROLES.includes(me.role)) {
-    redirect("/profile");
+  const role = (me?.role ?? "").toLowerCase();
+  const allowed = ["admin", "staff", "control_escolar", "admissions"];
+  if (!allowed.includes(role)) {
+    return (
+      <div className="p-6">
+        <p>No tienes acceso.</p>
+        <a className="underline" href="/profile">Volver</a>
+      </div>
+    );
   }
 
   return (
-    <div className="min-h-screen grid grid-cols-[260px_1fr]">
-      <aside className="border-r p-4">
-        <div className="mb-4">
-          <div className="text-sm opacity-60">Conectado como</div>
-          <div className="text-sm break-all">{me?.email ?? auth.user.email}</div>
-          <div className="text-xs opacity-60">Rol: {me?.role}</div>
-        </div>
-
-        <nav className="space-y-1 text-sm">
-          <Link href="/staff" className="block px-2 py-1 rounded hover:bg-gray-50">Inicio</Link>
-
-          <div className="mt-3 text-xs uppercase opacity-60 px-2">Áreas</div>
-          <Link href="/staff/admissions" className="block px-2 py-1 rounded hover:bg-gray-50">Admisiones (CRM)</Link>
-
-          <details className="px-2 py-1 rounded" open>
-            <summary className="cursor-pointer select-none">Control escolar</summary>
-            <div className="mt-1 ml-3 space-y-1">
-              <Link href="/staff/control-escolar/alumnos" className="block px-2 py-1 rounded hover:bg-gray-50">Alumnos</Link>
-              <Link href="/staff/control-escolar/profesores" className="block px-2 py-1 rounded hover:bg-gray-50">Profesores</Link>
-              <Link href="/staff/control-escolar/tramites" className="block px-2 py-1 rounded hover:bg-gray-50">Trámites</Link>
-              <Link
-                href="/staff/control-escolar/justificaciones"
-                className="px-2 py-1 rounded hover:bg-gray-50 flex items-center justify-between"
-              >
-                <span>Justificaciones</span>
-                {typeof pendingJustifs === "number" && pendingJustifs > 0 && (
-                  <span className="ml-2 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full text-xs font-medium bg-red-600 text-white">
-                    {pendingJustifs}
-                  </span>
-                )}
-              </Link>
-            </div>
-          </details>
-
-          <Link href="/staff/caja" className="block px-2 py-1 rounded hover:bg-gray-50">Caja</Link>
-        </nav>
-
-        <div className="mt-6">
-          <a href="/logout" className="text-sm px-2 py-1 rounded border inline-block">Cerrar sesión</a>
-        </div>
-      </aside>
-
-      <main className="p-6">{children}</main>
+    <div className="p-4">
+      <div className="grid grid-cols-12 gap-4">
+        <aside className="col-span-12 md:col-span-3 lg:col-span-2">
+          <SidebarNav />
+        </aside>
+        <main className="col-span-12 md:col-span-9 lg:col-span-10">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }
