@@ -2,21 +2,21 @@
 import Link from "next/link";
 import { createSupabaseServerClient } from "@/lib/supabase/serverClient";
 import AssignOwnerForm from "./AssignOwnerForm";
+import StageSelect from "./StageSelect";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 const SOURCES = ["Web", "Facebook", "Referido", "WhatsApp", "Evento", "Otro"];
-const CAMPAIGNS = ["Landing 2025", "Campaña Otoño", "Campaña Primavera", "Orgánico", "Sin campaña"];
 
 function slaBadge(ts?: string | null, fallback?: string | null) {
   const base = ts ?? fallback;
-  if (!base) return { label: "SLA: sin contacto", color: "#6b7280" }; // gris
+  if (!base) return { label: "SLA: sin contacto", color: "#6b7280" };
   const diffMs = Date.now() - new Date(base).getTime();
   const diffH = diffMs / 3_600_000;
-  if (diffH <= 24) return { label: "SLA: <24h", color: "#16a34a" }; // verde
-  if (diffH <= 48) return { label: "SLA: 24–48h", color: "#ca8a04" }; // ámbar
-  return { label: "SLA: >48h", color: "#dc2626" }; // rojo
+  if (diffH <= 24) return { label: "SLA: <24h", color: "#16a34a" };
+  if (diffH <= 48) return { label: "SLA: 24–48h", color: "#ca8a04" };
+  return { label: "SLA: >48h", color: "#dc2626" };
 }
 
 export default async function ProspectDetailPage({ params }: { params: { id: string } }) {
@@ -38,20 +38,22 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
   // Prospecto
   const { data: prospect } = await supabase
     .from("prospects")
-    .select(
-      `id, full_name, email, phone, source, campaign, stage,
-       owner_user_id, term_id, created_at, updated_at, last_contact_at`
-    )
+    .select(`
+      id, full_name, email, phone, source, stage,
+      owner_user_id, term_id, program_id,
+      created_at, updated_at, last_contact_at
+    `)
     .eq("id", prospectId)
     .maybeSingle();
   if (!prospect) return <div className="p-6">Prospecto no encontrado.</div>;
 
-  // Owner, terms y staff para asignar
-  const [{ data: owner }, { data: terms }, { data: staff }] = await Promise.all([
+  // Catálogos: terms y programas, staff para asignar
+  const [{ data: owner }, { data: terms }, { data: programs }, { data: staff }] = await Promise.all([
     prospect.owner_user_id
       ? supabase.from("profiles").select("email,user_id").eq("user_id", prospect.owner_user_id).maybeSingle()
       : Promise.resolve({ data: null } as any),
     supabase.from("Term").select("id,name").order("id", { ascending: false }),
+    supabase.from("Program").select("id, name, code").order("name", { ascending: true }),
     supabase.from("profiles").select("user_id,email,role").in("role", ["admin","admissions"]).order("email", { ascending: true }),
   ]);
 
@@ -71,6 +73,17 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
       .limit(200),
   ]);
 
+  // Mapear user_id -> email para listas
+  const idsSet = new Set<string>();
+  for (const it of interactions ?? []) if (it.user_id) idsSet.add(it.user_id as string);
+  for (const t of tasks ?? []) if (t.user_id) idsSet.add(t.user_id as string);
+  const ids = Array.from(idsSet);
+  let emailMap = new Map<string, string>();
+  if (ids.length) {
+    const { data: profs } = await supabase.from("profiles").select("user_id,email").in("user_id", ids);
+    emailMap = new Map((profs ?? []).map((p: any) => [p.user_id, p.email]));
+  }
+
   const sla = slaBadge(prospect.last_contact_at, prospect.created_at);
 
   return (
@@ -80,8 +93,7 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
         <div>
           <h1 className="text-xl font-semibold">Prospecto · {prospect.full_name}</h1>
           <div className="text-sm opacity-70">
-            #{prospect.id} · {prospect.email ?? "—"}
-            {prospect.phone ? ` · ${prospect.phone}` : ""}
+            #{prospect.id} · {prospect.email ?? "—"}{prospect.phone ? ` · ${prospect.phone}` : ""}
           </div>
         </div>
         <div className="flex gap-3">
@@ -90,13 +102,13 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
         </div>
       </div>
 
-      {/* Datos + SLA + Asignación */}
+      {/* Datos + SLA + Asignación + ETAPA EDITABLE */}
       <section className="border rounded p-3 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm items-start">
           <div>
             <div className="opacity-60 text-xs">Etapa</div>
-            <div className="font-medium capitalize">{prospect.stage}</div>
-            <div className="text-xs opacity-60">Cámbiala desde el Kanban (por ahora).</div>
+            <StageSelect prospectId={prospect.id} current={prospect.stage} />
+            <div className="text-xs opacity-60">El cambio queda auditado automáticamente.</div>
           </div>
 
           <div>
@@ -113,7 +125,7 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
               <span>{sla.label}</span>
             </div>
             <div className="text-xs opacity-60">
-              Se calcula con base en <b>Último contacto</b> o fecha de creación si no hay contacto.
+              Con base en <b>Último contacto</b> o fecha de creación.
             </div>
           </div>
 
@@ -131,7 +143,7 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
         />
       </section>
 
-      {/* Origen/Campaña/Periodo */}
+      {/* Origen / Programa / Periodo */}
       <section className="border rounded p-3 space-y-3">
         <form
           action={`/api/staff/admissions/prospects/${prospectId}/update`}
@@ -147,15 +159,19 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
               ))}
             </select>
           </div>
+
           <div>
-            <div className="opacity-60 text-xs">Campaña</div>
-            <select name="campaign" defaultValue={prospect.campaign ?? ""} className="w-full border rounded px-2 py-1">
+            <div className="opacity-60 text-xs">Programa de interés</div>
+            <select name="program_id" defaultValue={prospect.program_id ?? ""} className="w-full border rounded px-2 py-1">
               <option value="">—</option>
-              {CAMPAIGNS.map((c) => (
-                <option key={c} value={c}>{c}</option>
+              {(programs ?? []).map((p: any) => (
+                <option key={p.id} value={p.id}>
+                  {p.name ?? p.code ?? `Programa #${p.id}`}
+                </option>
               ))}
             </select>
           </div>
+
           <div>
             <div className="opacity-60 text-xs">Ciclo / Periodo</div>
             <select name="term_id" defaultValue={prospect.term_id ?? ""} className="w-full border rounded px-2 py-1">
@@ -165,6 +181,7 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
               ))}
             </select>
           </div>
+
           <div className="flex items-end">
             <button className="px-3 py-1 border rounded">Guardar</button>
           </div>
@@ -220,7 +237,7 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
                 <div className="col-span-2">{new Date(it.happened_at).toLocaleString()}</div>
                 <div className="col-span-2 capitalize">{it.type}</div>
                 <div className="col-span-6 whitespace-pre-wrap">{it.note ?? "—"}</div>
-                <div className="col-span-2">{it.user_id ?? "—"}</div>
+                <div className="col-span-2">{it.user_id ? (emailMap.get(it.user_id) ?? it.user_id) : "—"}</div>
               </div>
             ))}
             {(!interactions || !interactions.length) && (
@@ -230,7 +247,7 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
         </div>
       </section>
 
-      {/* Tareas (solo lectura) */}
+      {/* Tareas (solo lectura por ahora) */}
       <section className="space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="font-medium">Tareas</h2>
@@ -249,7 +266,7 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
                 <div className="col-span-6">{t.title}</div>
                 <div className="col-span-2">{t.due_at ? new Date(t.due_at).toLocaleString() : "—"}</div>
                 <div className="col-span-2 capitalize">{t.status}</div>
-                <div className="col-span-2">{t.user_id ?? "—"}</div>
+                <div className="col-span-2">{t.user_id ? (emailMap.get(t.user_id) ?? t.user_id) : "—"}</div>
               </div>
             ))}
             {(!tasks || !tasks.length) && (
