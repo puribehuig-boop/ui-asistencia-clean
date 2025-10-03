@@ -47,7 +47,7 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
     .maybeSingle();
   if (!prospect) return <div className="p-6">Prospecto no encontrado.</div>;
 
-  // Catálogos: terms y programas, staff para asignar
+  // Catálogos y staff
   const [{ data: owner }, { data: terms }, { data: programs }, { data: staff }] = await Promise.all([
     prospect.owner_user_id
       ? supabase.from("profiles").select("email,user_id").eq("user_id", prospect.owner_user_id).maybeSingle()
@@ -102,7 +102,7 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
         </div>
       </div>
 
-      {/* Datos + SLA + Asignación + ETAPA EDITABLE */}
+      {/* Datos + SLA + Asignación + Etapa */}
       <section className="border rounded p-3 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm items-start">
           <div>
@@ -143,8 +143,51 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
         />
       </section>
 
+      {/* NUEVO: Datos del prospecto (nombre, email, teléfono) */}
+      <section className="border rounded p-3 space-y-3">
+        <h2 className="font-medium">Datos del prospecto</h2>
+        <form
+          action={`/api/staff/admissions/prospects/${prospectId}/update`}
+          method="post"
+          className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm"
+        >
+          <div className="md:col-span-2">
+            <div className="opacity-60 text-xs">Nombre completo</div>
+            <input
+              name="full_name"
+              defaultValue={prospect.full_name ?? ""}
+              className="w-full border rounded px-2 py-1"
+              placeholder="Ej. María Pérez"
+            />
+          </div>
+          <div>
+            <div className="opacity-60 text-xs">Email</div>
+            <input
+              name="email"
+              type="email"
+              defaultValue={prospect.email ?? ""}
+              className="w-full border rounded px-2 py-1"
+              placeholder="correo@dominio.com"
+            />
+          </div>
+          <div>
+            <div className="opacity-60 text-xs">Teléfono</div>
+            <input
+              name="phone"
+              defaultValue={prospect.phone ?? ""}
+              className="w-full border rounded px-2 py-1"
+              placeholder="+52 55 1234 5678"
+            />
+          </div>
+          <div className="md:col-span-4 flex justify-end">
+            <button className="px-3 py-1 border rounded">Guardar</button>
+          </div>
+        </form>
+      </section>
+
       {/* Origen / Programa / Periodo */}
       <section className="border rounded p-3 space-y-3">
+        <h2 className="font-medium">Clasificación</h2>
         <form
           action={`/api/staff/admissions/prospects/${prospectId}/update`}
           method="post"
@@ -153,7 +196,7 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
           <div>
             <div className="opacity-60 text-xs">Origen</div>
             <select name="source" defaultValue={prospect.source ?? ""} className="w-full border rounded px-2 py-1">
-              <option value="">—</option>
+              <option value="">{(SOURCES.length ? "—" : "No hay opciones")}</option>
               {SOURCES.map((s) => (
                 <option key={s} value={s}>{s}</option>
               ))}
@@ -163,11 +206,9 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
           <div>
             <div className="opacity-60 text-xs">Programa de interés</div>
             <select name="program_id" defaultValue={prospect.program_id ?? ""} className="w-full border rounded px-2 py-1">
-              <option value="">—</option>
+              <option value="">{(programs?.length ?? 0) ? "—" : "No hay programas disponibles"}</option>
               {(programs ?? []).map((p: any) => (
-                <option key={p.id} value={p.id}>
-                  {p.name ?? `Programa #${p.id}`}
-                </option>
+                <option key={p.id} value={p.id}>{p.name ?? `Programa #${p.id}`}</option>
               ))}
             </select>
           </div>
@@ -175,7 +216,7 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
           <div>
             <div className="opacity-60 text-xs">Ciclo / Periodo</div>
             <select name="term_id" defaultValue={prospect.term_id ?? ""} className="w-full border rounded px-2 py-1">
-              <option value="">—</option>
+              <option value="">{(terms?.length ?? 0) ? "—" : "No hay periodos disponibles"}</option>
               {(terms ?? []).map((t: any) => (
                 <option key={t.id} value={t.id}>{t.name ?? `Term #${t.id}`}</option>
               ))}
