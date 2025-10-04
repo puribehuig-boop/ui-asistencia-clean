@@ -25,6 +25,9 @@ export default async function ProspectsListPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Admisiones · Prospectos</h1>
         <a href="/staff/admissions/kanban" className="text-sm underline">Ver Kanban</a>
+                <div className="flex items-center justify-between mb-3">
+          <a href="/staff/admissions/prospects/new" className="px-3 py-1.5 border rounded hover:bg-gray-50"> Agregar prospecto</a>
+        </div>
       </div>
 
       <div className="border rounded overflow-auto">
