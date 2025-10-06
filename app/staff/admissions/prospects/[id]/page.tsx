@@ -317,5 +317,25 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
         </div>
       </section>
     </div>
+
+    {/* Conversión a alumno */}
+{prospect.stage === "inscrito" && (
+  <section className="border rounded p-3 space-y-3">
+    <h2 className="font-medium">Inscripción</h2>
+    <div className="text-sm">
+      Para convertirlo, asegúrate de haber elegido <b>Programa de interés</b> y <b>Ciclo/Periodo</b> en “Clasificación”.
+      Se creará (o reutilizará) la cuenta de alumno y se registrará su inscripción.
+    </div>
+    <form method="post" action={`/api/staff/admissions/prospects/${prospectId}/enroll`}>
+      <button className="px-3 py-1.5 border rounded bg-black text-white">
+        Convertir a alumno
+      </button>
+    </form>
+    <div className="text-xs opacity-60">
+      Tras convertir, te llevamos a Control Escolar → Alumnos, para continuar con asignaciones de grupo y documentos.
+    </div>
+  </section>
+)}
+
   );
 }
