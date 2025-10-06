@@ -30,10 +30,14 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
     .eq("user_id", auth?.user?.id ?? "")
     .maybeSingle();
   const role = (me?.role ?? "").toLowerCase();
-  if (!["admin", "admissions"].includes(role)) return <div className="p-6">No tienes acceso.</div>;
+  if (!["admin", "admissions"].includes(role)) {
+    return <div className="p-6">No tienes acceso.</div>;
+  }
 
   const prospectId = Number(params.id || 0);
-  if (!prospectId) return <div className="p-6">ID inválido.</div>;
+  if (!prospectId) {
+    return <div className="p-6">ID inválido.</div>;
+  }
 
   // Prospecto
   const { data: prospect } = await supabase
@@ -45,16 +49,23 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
     `)
     .eq("id", prospectId)
     .maybeSingle();
-  if (!prospect) return <div className="p-6">Prospecto no encontrado.</div>;
+
+  if (!prospect) {
+    return <div className="p-6">Prospecto no encontrado.</div>;
+  }
 
   // Catálogos y staff
   const [{ data: owner }, { data: terms }, { data: programs }, { data: staff }] = await Promise.all([
     prospect.owner_user_id
       ? supabase.from("profiles").select("email,user_id").eq("user_id", prospect.owner_user_id).maybeSingle()
       : Promise.resolve({ data: null } as any),
-    supabase.from("Term").select("id,name").order("id", { ascending: false }),
-    supabase.from("Program").select("id, name").order("name", { ascending: true }),
-    supabase.from("profiles").select("user_id,email,role").in("role", ["admin","admissions"]).order("email", { ascending: true }),
+    supabase.from("Term").select("id,name").order("name", { ascending: true }),
+    supabase.from("Program").select("id,name").order("name", { ascending: true }),
+    supabase
+      .from("profiles")
+      .select("user_id,email,role")
+      .in("role", ["admin", "admissions"])
+      .order("email", { ascending: true }),
   ]);
 
   // Interacciones y tareas
@@ -93,12 +104,17 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
         <div>
           <h1 className="text-xl font-semibold">Prospecto · {prospect.full_name}</h1>
           <div className="text-sm opacity-70">
-            #{prospect.id} · {prospect.email ?? "—"}{prospect.phone ? ` · ${prospect.phone}` : ""}
+            #{prospect.id} · {prospect.email ?? "—"}
+            {prospect.phone ? ` · ${prospect.phone}` : ""}
           </div>
         </div>
         <div className="flex gap-3">
-          <Link href="/staff/admissions/prospects" className="text-sm underline">Ver lista</Link>
-          <Link href="/staff/admissions/kanban" className="text-sm underline">Ver Kanban</Link>
+          <Link href="/staff/admissions/prospects" className="text-sm underline">
+            Ver lista
+          </Link>
+          <Link href="/staff/admissions/kanban" className="text-sm underline">
+            Ver Kanban
+          </Link>
         </div>
       </div>
 
@@ -121,7 +137,10 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
           <div>
             <div className="opacity-60 text-xs">SLA</div>
             <div className="flex items-center gap-2">
-              <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: sla.color }} />
+              <span
+                className="inline-block w-2.5 h-2.5 rounded-full"
+                style={{ background: sla.color }}
+              />
               <span>{sla.label}</span>
             </div>
             <div className="text-xs opacity-60">
@@ -131,7 +150,11 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
 
           <div>
             <div className="opacity-60 text-xs">Último contacto</div>
-            <div>{prospect.last_contact_at ? new Date(prospect.last_contact_at).toLocaleString() : "—"}</div>
+            <div>
+              {prospect.last_contact_at
+                ? new Date(prospect.last_contact_at).toLocaleString()
+                : "—"}
+            </div>
           </div>
         </div>
 
@@ -143,7 +166,7 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
         />
       </section>
 
-      {/* NUEVO: Datos del prospecto (nombre, email, teléfono) */}
+      {/* Datos del prospecto */}
       <section className="border rounded p-3 space-y-3">
         <h2 className="font-medium">Datos del prospecto</h2>
         <form
@@ -185,7 +208,7 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
         </form>
       </section>
 
-      {/* Origen / Programa / Periodo */}
+      {/* Clasificación */}
       <section className="border rounded p-3 space-y-3">
         <h2 className="font-medium">Clasificación</h2>
         <form
@@ -195,30 +218,52 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
         >
           <div>
             <div className="opacity-60 text-xs">Origen</div>
-            <select name="source" defaultValue={prospect.source ?? ""} className="w-full border rounded px-2 py-1">
-              <option value="">{(SOURCES.length ? "—" : "No hay opciones")}</option>
+            <select
+              name="source"
+              defaultValue={prospect.source ?? ""}
+              className="w-full border rounded px-2 py-1"
+            >
+              <option value="">{SOURCES.length ? "—" : "No hay opciones"}</option>
               {SOURCES.map((s) => (
-                <option key={s} value={s}>{s}</option>
+                <option key={s} value={s}>
+                  {s}
+                </option>
               ))}
             </select>
           </div>
 
           <div>
             <div className="opacity-60 text-xs">Programa de interés</div>
-            <select name="program_id" defaultValue={prospect.program_id ?? ""} className="w-full border rounded px-2 py-1">
-              <option value="">{(programs?.length ?? 0) ? "—" : "No hay programas disponibles"}</option>
+            <select
+              name="program_id"
+              defaultValue={prospect.program_id ?? ""}
+              className="w-full border rounded px-2 py-1"
+            >
+              <option value="">
+                {(programs?.length ?? 0) ? "—" : "No hay programas disponibles"}
+              </option>
               {(programs ?? []).map((p: any) => (
-                <option key={p.id} value={p.id}>{p.name ?? `Programa #${p.id}`}</option>
+                <option key={p.id} value={p.id}>
+                  {p.name ?? `Programa #${p.id}`}
+                </option>
               ))}
             </select>
           </div>
 
           <div>
             <div className="opacity-60 text-xs">Ciclo / Periodo</div>
-            <select name="term_id" defaultValue={prospect.term_id ?? ""} className="w-full border rounded px-2 py-1">
-              <option value="">{(terms?.length ?? 0) ? "—" : "No hay periodos disponibles"}</option>
+            <select
+              name="term_id"
+              defaultValue={prospect.term_id ?? ""}
+              className="w-full border rounded px-2 py-1"
+            >
+              <option value="">
+                {(terms?.length ?? 0) ? "—" : "No hay periodos disponibles"}
+              </option>
               {(terms ?? []).map((t: any) => (
-                <option key={t.id} value={t.id}>{t.name ?? `Term #${t.id}`}</option>
+                <option key={t.id} value={t.id}>
+                  {t.name ?? `Term #${t.id}`}
+                </option>
               ))}
             </select>
           </div>
@@ -241,7 +286,12 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
           <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
             <div>
               <div className="opacity-60 text-xs">Tipo</div>
-              <select name="type" className="w-full border rounded px-2 py-1" defaultValue="nota" required>
+              <select
+                name="type"
+                className="w-full border rounded px-2 py-1"
+                defaultValue="nota"
+                required
+              >
                 <option value="nota">Nota</option>
                 <option value="llamada">Llamada</option>
                 <option value="correo">Correo</option>
@@ -252,17 +302,28 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
             </div>
             <div className="md:col-span-2">
               <div className="opacity-60 text-xs">Detalle</div>
-              <textarea name="note" className="w-full border rounded px-2 py-1" rows={2} placeholder="Escribe una nota..."></textarea>
+              <textarea
+                name="note"
+                className="w-full border rounded px-2 py-1"
+                rows={2}
+                placeholder="Escribe una nota..."
+              />
             </div>
             <div>
               <div className="opacity-60 text-xs">Fecha/hora (opcional)</div>
-              <input type="datetime-local" name="happened_at" className="w-full border rounded px-2 py-1" />
+              <input
+                type="datetime-local"
+                name="happened_at"
+                className="w-full border rounded px-2 py-1"
+              />
             </div>
           </div>
           <div className="flex justify-end">
             <button className="px-3 py-1 border rounded">Agregar interacción</button>
           </div>
-          <div className="text-xs opacity-60">Actualiza <b>Último contacto</b> automáticamente.</div>
+          <div className="text-xs opacity-60">
+            Actualiza <b>Último contacto</b> automáticamente.
+          </div>
         </form>
 
         <div className="border rounded">
@@ -275,10 +336,16 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
           <div>
             {(interactions ?? []).map((it: any) => (
               <div key={it.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm">
-                <div className="col-span-2">{new Date(it.happened_at).toLocaleString()}</div>
+                <div className="col-span-2">
+                  {new Date(it.happened_at).toLocaleString()}
+                </div>
                 <div className="col-span-2 capitalize">{it.type}</div>
-                <div className="col-span-6 whitespace-pre-wrap">{it.note ?? "—"}</div>
-                <div className="col-span-2">{it.user_id ? (emailMap.get(it.user_id) ?? it.user_id) : "—"}</div>
+                <div className="col-span-6 whitespace-pre-wrap">
+                  {it.note ?? "—"}
+                </div>
+                <div className="col-span-2">
+                  {it.user_id ? emailMap.get(it.user_id) ?? it.user_id : "—"}
+                </div>
               </div>
             ))}
             {(!interactions || !interactions.length) && (
@@ -288,7 +355,7 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
         </div>
       </section>
 
-      {/* Tareas (solo lectura por ahora) */}
+      {/* Tareas (solo lectura) */}
       <section className="space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="font-medium">Tareas</h2>
@@ -305,9 +372,13 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
             {(tasks ?? []).map((t: any) => (
               <div key={t.id} className="grid grid-cols-12 border-t px-3 py-2 text-sm">
                 <div className="col-span-6">{t.title}</div>
-                <div className="col-span-2">{t.due_at ? new Date(t.due_at).toLocaleString() : "—"}</div>
+                <div className="col-span-2">
+                  {t.due_at ? new Date(t.due_at).toLocaleString() : "—"}
+                </div>
                 <div className="col-span-2 capitalize">{t.status}</div>
-                <div className="col-span-2">{t.user_id ? (emailMap.get(t.user_id) ?? t.user_id) : "—"}</div>
+                <div className="col-span-2">
+                  {t.user_id ? emailMap.get(t.user_id) ?? t.user_id : "—"}
+                </div>
               </div>
             ))}
             {(!tasks || !tasks.length) && (
@@ -316,26 +387,30 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
           </div>
         </div>
       </section>
-    </div>
 
-    {/* Conversión a alumno */}
-{prospect.stage === "inscrito" && (
-  <section className="border rounded p-3 space-y-3">
-    <h2 className="font-medium">Inscripción</h2>
-    <div className="text-sm">
-      Para convertirlo, asegúrate de haber elegido <b>Programa de interés</b> y <b>Ciclo/Periodo</b> en “Clasificación”.
-      Se creará (o reutilizará) la cuenta de alumno y se registrará su inscripción.
+      {/* Conversión a alumno */}
+      {prospect.stage === "inscrito" && (
+        <section className="border rounded p-3 space-y-3">
+          <h2 className="font-medium">Inscripción</h2>
+          <div className="text-sm">
+            Para convertirlo, asegúrate de haber elegido <b>Programa de interés</b> y{" "}
+            <b>Ciclo/Periodo</b> en “Clasificación”. Se creará (o reutilizará) la cuenta de alumno
+            y se registrará su inscripción.
+          </div>
+          <form
+            method="post"
+            action={`/api/staff/admissions/prospects/${prospectId}/enroll`}
+          >
+            <button className="px-3 py-1.5 border rounded bg-black text-white">
+              Convertir a alumno
+            </button>
+          </form>
+          <div className="text-xs opacity-60">
+            Tras convertir, te llevamos a Control Escolar → Alumnos, para continuar con asignaciones
+            de grupo y documentos.
+          </div>
+        </section>
+      )}
     </div>
-    <form method="post" action={`/api/staff/admissions/prospects/${prospectId}/enroll`}>
-      <button className="px-3 py-1.5 border rounded bg-black text-white">
-        Convertir a alumno
-      </button>
-    </form>
-    <div className="text-xs opacity-60">
-      Tras convertir, te llevamos a Control Escolar → Alumnos, para continuar con asignaciones de grupo y documentos.
-    </div>
-  </section>
-)}
-
   );
 }
