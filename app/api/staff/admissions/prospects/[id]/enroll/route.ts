@@ -59,7 +59,15 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
   if (existingProfile?.user_id) {
     userId = existingProfile.user_id;
-    // NO cambiamos su rol si ya es admin/docente/alumno
+
+    // Si NO es admin, forzamos a 'alumno'
+    if ((existingProfile.role ?? "").toLowerCase() !== "admin") {
+      const { error: updErr } = await supabaseAdmin
+        .from("profiles")
+        .update({ role: "alumno" })
+        .eq("user_id", userId);
+      if (updErr) return NextResponse.json({ ok:false, error: updErr.message }, { status: 500 });
+    }
   } else {
     // Crear usuario en auth con SERVICE ROLE
     const { data: created, error: createErr } = await supabaseAdmin.auth.admin.createUser({
@@ -73,30 +81,29 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     }
     userId = created.user.id;
 
-    // Insert/Upsert de profiles con SERVICE ROLE (omite RLS)
+    // Upsert de profiles con SERVICE ROLE (omite RLS) → rol alumno
     const { error: upErr } = await supabaseAdmin
       .from("profiles")
       .upsert(
         { user_id: userId, email: pr.email.toLowerCase(), role: "alumno" },
-        { onConflict: "email" }
+        { onConflict: "user_id" }
       );
     if (upErr) return NextResponse.json({ ok:false, error: upErr.message }, { status: 500 });
   }
 
-  // 3) Upsert de StudentProfile con SERVICE ROLE (evitamos RLS)
-  // Ajusta los nombres de columnas a tu esquema (fullName/userId vs first_name/last_name)
+  // 3) Upsert de StudentProfile con SERVICE ROLE
   const { error: spErr } = await supabaseAdmin
     .from("StudentProfile")
     .upsert(
       {
         userId: userId,
-        fullName: pr.full_name ?? pr.email, // cámbialo si usas otro modelo de nombre
+        fullName: pr.full_name ?? pr.email, // ajusta si usas otro modelo
       },
       { onConflict: "userId" }
     );
   if (spErr) return NextResponse.json({ ok:false, error: spErr.message }, { status: 500 });
 
-  // 4) Alta académica en ProgramEnrollment (tabla recomendada para histórico)
+  // 4) Alta académica en ProgramEnrollment (histórico)
   const { error: peErr } = await supabaseAdmin
     .from("ProgramEnrollment")
     .insert({
@@ -106,7 +113,6 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       sourceProspectId: pr.id,
       status: "active",
     });
-  // Permitimos idempotencia simple
   if (peErr && !peErr.message.includes("duplicate key")) {
     return NextResponse.json({ ok:false, error: peErr.message }, { status: 500 });
   }
